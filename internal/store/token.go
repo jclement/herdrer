@@ -142,3 +142,26 @@ func (s *Store) RevokeAPIToken(ctx context.Context, userID, id string) error {
 	}
 	return nil
 }
+
+// LiveAPITokenByName finds an unrevoked, unexpired token with the given name.
+//
+// Used to decide whether herdrer still needs to provision a credential for the
+// agents on this box, without ever needing the plaintext — which it does not
+// have and cannot recover.
+func (s *Store) LiveAPITokenByName(ctx context.Context, userID, name string) (*APIToken, error) {
+	list, err := s.ListAPITokens(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, t := range list {
+		if t.Name != name || t.RevokedAt != nil {
+			continue
+		}
+		if t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
+			continue
+		}
+		return t, nil
+	}
+	return nil, ErrNotFound
+}

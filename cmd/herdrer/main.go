@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/jclement/herdrer/internal/agentskill"
 	"github.com/jclement/herdrer/internal/api"
 	"github.com/jclement/herdrer/internal/auth"
 	"github.com/jclement/herdrer/internal/config"
@@ -142,6 +143,21 @@ func cmdServe(args []string) error {
 	defer close(stopReaper)
 
 	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus, pastes, version)
+
+	// Teach the agents on this box about herdrer, and give them a credential.
+	//
+	// Both on every start, because a hand-installed skill drifts the moment the
+	// API changes and a credential nobody provisions is a step that never
+	// happens. Neither is fatal: herdrer's job is to be reachable, and failing
+	// to write a dotfile is not a reason to refuse to boot.
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := agentskill.Install(home, agentskill.Render(cfg.Origin)); err != nil {
+			slog.Warn("could not install the agent skill", "err", err)
+		}
+		if err := agentskill.EnsureCredential(ctx, st, authSvc, home, cfg.Origin); err != nil {
+			slog.Warn("could not provision an agent credential", "err", err)
+		}
+	}
 
 	n, err := st.CountUsers(ctx)
 	if err != nil {
