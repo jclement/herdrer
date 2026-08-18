@@ -18,6 +18,13 @@ import { useToast } from "../../components/toast";
 import { InboxRow } from "./InboxRow";
 import { InstallNudge } from "./InstallNudge";
 
+/**
+ * The list, kept.
+ *
+ * Making review an overlay must not mean an item is only visible in the second
+ * it happens to arrive. Everything open, deferred, answered or expired is here,
+ * and this is where you come to find the thing you parked this morning.
+ */
 export function InboxPage() {
   const { data, isPending, error, refetch, isFetching, dataUpdatedAt } = useReviews("all");
   const agents = useAgents();

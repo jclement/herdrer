@@ -12,6 +12,7 @@ import (
 	"github.com/jclement/herdrer/internal/auth"
 	"github.com/jclement/herdrer/internal/config"
 	"github.com/jclement/herdrer/internal/notify"
+	"github.com/jclement/herdrer/internal/paste"
 	"github.com/jclement/herdrer/internal/review"
 	"github.com/jclement/herdrer/internal/store"
 	"github.com/jclement/herdrer/internal/terminal"
@@ -50,12 +51,16 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 	rv := review.New(st, nil, bus, 25, 24, 168)
 	tm := terminal.New(true, dir)
 	ptys := terminal.NewManager(ctx, tm, 2)
+	pastes, err := paste.New(dir)
+	if err != nil {
+		t.Fatalf("paste store: %v", err)
+	}
 
 	u := &store.User{ID: "user-1", Handle: "jeff", DisplayName: "Jeff", Role: "admin", CreatedAt: time.Now()}
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, "test"), st, u
+	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, pastes, "test"), st, u
 }
 
 // newTestServerNoUser returns a server on a box that has never been enrolled,
@@ -117,6 +122,7 @@ var everyRoute = []route{
 	{"GET", "/api/v1/agents", "session"},
 	{"GET", "/api/v1/herdr/state", "session"},
 	{"POST", "/api/v1/terminal/ticket", "session"},
+	{"POST", "/api/v1/paste", "session"},
 	{"POST", "/api/v1/stream/ticket", "session"},
 
 	{"POST", "/api/v1/agent/review", "token"},

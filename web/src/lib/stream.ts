@@ -99,6 +99,7 @@ export function useStream(enabled: boolean): StreamState {
           break;
         case "agent.status":
           void qc.invalidateQueries({ queryKey: qk.agents });
+          void qc.invalidateQueries({ queryKey: qk.herdrState });
           void qc.invalidateQueries({ queryKey: qk.bootstrap });
           break;
         case "counts":
@@ -114,6 +115,7 @@ export function useStream(enabled: boolean): StreamState {
       // The screen must be correct within one round trip, before the socket is back.
       void qc.invalidateQueries({ queryKey: qk.bootstrap });
       void qc.invalidateQueries({ queryKey: ["reviews"] });
+      void qc.invalidateQueries({ queryKey: qk.herdrState });
       if (socketRef.current?.readyState === WebSocket.OPEN) return;
       attemptRef.current = 0;
       clearTimer();

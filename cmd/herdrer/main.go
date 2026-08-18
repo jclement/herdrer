@@ -20,6 +20,7 @@ import (
 	"github.com/jclement/herdrer/internal/auth"
 	"github.com/jclement/herdrer/internal/config"
 	"github.com/jclement/herdrer/internal/notify"
+	"github.com/jclement/herdrer/internal/paste"
 	"github.com/jclement/herdrer/internal/review"
 	"github.com/jclement/herdrer/internal/store"
 	"github.com/jclement/herdrer/internal/terminal"
@@ -132,7 +133,15 @@ func cmdServe(args []string) error {
 		defer termSvc.StopKeeper()
 	}
 
-	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus, version)
+	pastes, err := paste.New(cfg.StateDir)
+	if err != nil {
+		return err
+	}
+	stopReaper := make(chan struct{})
+	pastes.StartReaper(stopReaper)
+	defer close(stopReaper)
+
+	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus, pastes, version)
 
 	n, err := st.CountUsers(ctx)
 	if err != nil {

@@ -13,7 +13,7 @@ export function NotFound() {
       </p>
       <p className="text-xs text-muted">{taglineForDate()}</p>
       <Link to="/">
-        <Button variant="primary">Back to the inbox</Button>
+        <Button variant="primary">Back to herdr</Button>
       </Link>
     </div>
   );

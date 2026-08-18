@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import {
-  ChevronLeft,
+  Bell,
   ClipboardPaste,
   Fingerprint,
   Keyboard,
@@ -9,6 +9,7 @@ import {
   Plus,
   Power,
   ShieldOff,
+  X,
 } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -18,8 +19,11 @@ import { stepUp } from "../../lib/stepup";
 import type { Ticket } from "../../lib/types";
 import { flags } from "../../lib/storage";
 import { useVisualViewport } from "../../lib/viewport";
+import { useBootstrap } from "../../lib/queries";
 import { Button, cx } from "../../components/ui";
+import { BottomNav } from "../../components/AppShell";
 import { useToast } from "../../components/toast";
+import { useReviewQueue } from "../review/ReviewQueue";
 
 /**
  * The wire format is in the API contract: the first byte of every frame is the
@@ -39,10 +43,33 @@ type Gate = "stepup" | "review-only";
 
 const FONT_SIZES = [10, 12, 14] as const;
 
+/**
+ * herdr, live, and the front page of the app.
+ *
+ * The inversion this route represents is the whole redesign: you open herdrer
+ * and you are looking at the multiplexer, not at a list of things it wants from
+ * you. Questions arrive on top of this (see features/review/ReviewQueue.tsx)
+ * and dismiss back to it.
+ *
+ * Two ergonomics carry over from the old buried route and are load-bearing:
+ *
+ *   Read-only until you take control. A PTY that accepts input the moment it
+ *   paints is a PTY that eats a stray tap on a train. Taking control is a
+ *   deliberate act, and it is also the signal the review queue uses to decide
+ *   whether an arriving question may interrupt.
+ *
+ *   The bottom of the screen belongs to exactly one thing at a time. Before you
+ *   take control it is navigation; after, it is the modifier bar, because a
+ *   phone keyboard has no ctrl, esc, tab or arrows. Releasing control gives the
+ *   navigation back.
+ */
 export function TerminalPage() {
-  const { name } = useParams({ from: "/agents/$name/term" });
+  const search = useSearch({ from: "/" }) as { session?: string; pane?: string };
+  const session = search.session ?? "";
   const toast = useToast();
   const vv = useVisualViewport();
+  const queue = useReviewQueue();
+  const boot = useBootstrap();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -56,6 +83,7 @@ export function TerminalPage() {
   const [asserting, setAsserting] = useState(false);
   const steppedUp = useRef(false);
   const [interactive, setInteractive] = useState(false);
+  const [paneHint, setPaneHint] = useState<string | null>(search.pane ?? null);
   const [fontSize, setFontSize] = useState<number>(() => {
     const stored = Number(flags.read("term-font"));
     return FONT_SIZES.includes(stored as (typeof FONT_SIZES)[number]) ? stored : 12;
@@ -71,6 +99,11 @@ export function TerminalPage() {
   });
 
   const encoder = useMemo(() => new TextEncoder(), []);
+
+  // The terminal is built once and never re-created, so the queue is reached
+  // through a ref rather than being captured in the onData closure.
+  const noteInputRef = useRef(queue.noteInput);
+  noteInputRef.current = queue.noteInput;
 
   const sendBytes = useCallback((bytes: Uint8Array) => {
     const ws = wsRef.current;
@@ -145,7 +178,12 @@ export function TerminalPage() {
       textarea.setAttribute("enterkeyhint", "send");
     }
 
-    const sub = term.onData((data) => sendText(data));
+    const sub = term.onData((data) => {
+      // Every keystroke tells the review queue the human is mid-word, which is
+      // what stops a sheet mounting on top of the next one.
+      noteInputRef.current();
+      sendText(data);
+    });
     return () => {
       sub.dispose();
       term.dispose();
@@ -178,9 +216,14 @@ export function TerminalPage() {
         // but a Face ID sheet nobody asked for reads as a bug. Explain first,
         // then assert from the button — which is also the user gesture Safari
         // wants before it will run the ceremony at all.
+        //
+        // `session` is a *herdr session name*, and omitting it attaches to the
+        // default session — the one whose tree /agents renders. It is not an
+        // agent name: passing one would make herdr launch a brand new, empty
+        // session named after the agent you were trying to look at.
         ticket = await api.post<Ticket>(
           "/api/v1/terminal/ticket",
-          { session: name },
+          session ? { session } : {},
           { stepUp: false },
         );
       } catch (err) {
@@ -208,7 +251,7 @@ export function TerminalPage() {
           ticket: ticket.ticket,
           cols: term?.cols ?? 80,
           rows: term?.rows ?? 24,
-          session: name,
+          ...(session ? { session } : {}),
         }),
       );
       ws.binaryType = "arraybuffer";
@@ -262,7 +305,7 @@ export function TerminalPage() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [name, sendControl, gate, attempt]);
+  }, [session, sendControl, gate, attempt]);
 
   const authorise = async () => {
     setAsserting(true);
@@ -293,13 +336,46 @@ export function TerminalPage() {
     return () => window.clearTimeout(handle);
   }, [vv.height, vv.offsetTop, sendControl]);
 
+  // Whether the human holds the terminal is what decides if a `normal` question
+  // may take the screen, so the queue has to know.
+  useEffect(() => {
+    queue.setInteractive(interactive);
+  }, [interactive, queue]);
+
+  /*
+   * Handing focus over, and taking it back.
+   *
+   * A sheet only ever mounts when the queue has decided it cannot cost a
+   * keystroke, so by the time we get here it is safe to move focus — but it is
+   * still not safe to leave the PTY focused underneath, or characters typed at
+   * the sheet's note field would race the shell. Blur on the way in; restore on
+   * the way out, but only if the human still holds the terminal.
+   */
+  const sheetId = queue.sheetId;
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    if (sheetId !== null) {
+      term.blur();
+      return;
+    }
+    if (interactive) term.focus();
+  }, [sheetId, interactive]);
+
   const takeControl = () => {
     setInteractive(true);
     termRef.current?.focus();
   };
 
+  const releaseControl = () => {
+    setInteractive(false);
+    setSticky({ ctrl: false, alt: false, lock: null });
+    termRef.current?.blur();
+  };
+
   const pressKey = (seq: string) => {
     if (!interactive) return;
+    queue.noteInput();
     sendText(seq);
     if (sticky.lock === null && (sticky.ctrl || sticky.alt)) {
       setSticky({ ctrl: false, alt: false, lock: null });
@@ -321,7 +397,10 @@ export function TerminalPage() {
   const paste = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text) sendText(text);
+      if (text) {
+        queue.noteInput();
+        sendText(text);
+      }
     } catch {
       toast.show("The clipboard wouldn't open. Long-press over a canvas is unreliable on iOS.", {
         tone: "danger",
@@ -329,8 +408,8 @@ export function TerminalPage() {
     }
   };
 
-  const barHeight = interactive ? 96 : 48;
-  const termHeight = Math.max(120, vv.height - 40 - barHeight);
+  const chrome = interactive ? 96 : 48 + 56; // key bar, or read-only bar plus nav
+  const termHeight = Math.max(120, vv.height - 40 - chrome - (paneHint ? 28 : 0));
 
   return (
     <div className="fixed inset-0 flex flex-col bg-surface" style={{ height: vv.height }}>
@@ -338,17 +417,13 @@ export function TerminalPage() {
         className="flex h-10 shrink-0 items-center gap-2 bg-chrome px-2 text-chrome-fg"
         style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
-        <Link
-          to="/agents"
-          aria-label="Back to agents"
-          className="-ml-1 flex h-9 w-9 items-center justify-center rounded hover:bg-white/10"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </Link>
-        <div className="min-w-0 flex-1 truncate font-mono text-xs">{name}</div>
+        <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
+          {session || "default session"}
+        </span>
         <span
           className={cx(
-            "rounded border px-1.5 py-0.5 text-[10px]",
+            "shrink-0 rounded border px-1.5 py-0.5 text-[10px]",
             phase === "open"
               ? "border-ok/50 text-ok"
               : phase === "connecting"
@@ -358,8 +433,36 @@ export function TerminalPage() {
         >
           {phase}
         </span>
+        {queue.open > 0 && (
+          <button
+            onClick={queue.openStack}
+            aria-label={`${queue.open} waiting on you`}
+            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-fg hover:bg-white/10"
+          >
+            <Bell className="w-4 h-4" />
+            <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-white">
+              {queue.open > 99 ? "99+" : queue.open}
+            </span>
+          </button>
+        )}
         <FontControl size={fontSize} onChange={setFontSize} />
       </header>
+
+      {paneHint && (
+        <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2 text-[11px] text-muted">
+          <span className="truncate">
+            you came from pane <span className="font-mono text-heading">{paneHint}</span> — herdr
+            has no focus-by-id over HTTP, so switch to it in the TUI
+          </span>
+          <button
+            aria-label="Dismiss"
+            onClick={() => setPaneHint(null)}
+            className="ml-auto shrink-0 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       <div className="relative min-h-0 flex-1">
         <div
@@ -378,29 +481,37 @@ export function TerminalPage() {
       </div>
 
       {failure && !gate && (
-        <div className="border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+        <div className="shrink-0 border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
           {failure}
         </div>
       )}
       {phase === "closed" && !failure && !gate && (
-        <div className="border-t border-border px-3 py-2 text-xs text-muted">
-          The socket closed. Tickets are single use — go back and open it again.
+        <div className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted">
+          <span className="flex-1">The socket closed. Tickets are single use.</span>
+          <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+            Reconnect
+          </Button>
         </div>
       )}
 
       {!interactive ? (
-        <div
-          className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-2 px-3 py-2"
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
-        >
-          <div className="flex-1 text-[11px] text-muted">
-            Read-only. Nothing you do here reaches the agent until you take control.
+        <>
+          <div className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-2 px-3 py-2">
+            <div className="flex-1 text-[11px] text-muted">
+              Read-only. Nothing you do here reaches the agent until you take control.
+            </div>
+            <Button variant="primary" size="lg" onClick={takeControl} disabled={phase !== "open"}>
+              <Power className="w-4 h-4" />
+              Take control
+            </Button>
           </div>
-          <Button variant="primary" size="lg" onClick={takeControl} disabled={phase !== "open"}>
-            <Power className="w-4 h-4" />
-            Take control
-          </Button>
-        </div>
+          <BottomNav
+            embedded
+            reviewBadge={queue.open}
+            agentBadge={boot.data?.counts.agents_blocked ?? 0}
+            warnMore={boot.data?.vapid_public_key === null}
+          />
+        </>
       ) : (
         <ModifierBar
           sticky={sticky}
@@ -409,6 +520,7 @@ export function TerminalPage() {
           onLetter={pressLetterWithModifiers}
           onPaste={() => void paste()}
           onKeyboard={() => termRef.current?.focus()}
+          onRelease={releaseControl}
         />
       )}
     </div>
@@ -442,7 +554,7 @@ function StepUpGate({
             <p className="mt-2 text-sm text-heading">Touch your passkey to open a terminal</p>
             <p className="mt-1 text-xs text-muted">
               A signed-in session isn't enough to reach a shell — herdrer wants a passkey check from
-              the last five minutes.
+              the last five minutes. Answering a review never asks for this.
             </p>
             <Button
               variant="primary"
@@ -480,7 +592,7 @@ function StepUpGate({
 function FontControl({ size, onChange }: { size: number; onChange: (n: number) => void }) {
   const idx = FONT_SIZES.indexOf(size as (typeof FONT_SIZES)[number]);
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       <button
         aria-label="Smaller text"
         className="flex h-8 w-8 items-center justify-center rounded text-chrome-muted hover:bg-white/10"
@@ -503,6 +615,10 @@ function FontControl({ size, onChange }: { size: number; onChange: (n: number) =
 /**
  * A phone keyboard has no ctrl, esc, tab or arrows, so the bar supplies them.
  * ctrl and alt are sticky one-shots: tap, then a letter. Double-tap locks.
+ *
+ * The release key is not decoration: while you hold the terminal the bottom of
+ * the screen is this bar rather than the app's navigation, and letting go is
+ * how you get the rest of the app back.
  */
 function ModifierBar({
   sticky,
@@ -511,6 +627,7 @@ function ModifierBar({
   onLetter,
   onPaste,
   onKeyboard,
+  onRelease,
 }: {
   sticky: { ctrl: boolean; alt: boolean; lock: "ctrl" | "alt" | null };
   setSticky: (s: { ctrl: boolean; alt: boolean; lock: "ctrl" | "alt" | null }) => void;
@@ -518,6 +635,7 @@ function ModifierBar({
   onLetter: (letter: string) => void;
   onPaste: () => void;
   onKeyboard: () => void;
+  onRelease: () => void;
 }) {
   const vv = useVisualViewport();
 
@@ -544,6 +662,14 @@ function ModifierBar({
       }}
     >
       <div className="scroll-x no-scrollbar flex items-center gap-1 px-2 py-1.5">
+        <button
+          aria-label="Release control"
+          onClick={onRelease}
+          className="flex h-11 shrink-0 items-center gap-1 rounded border border-border px-2 text-xs text-muted"
+        >
+          <Power className="w-4 h-4" />
+          release
+        </button>
         <BarKey label="esc" onPress={() => onKey("\x1b")} />
         <BarKey label="tab" onPress={() => onKey("\t")} />
         <BarKey

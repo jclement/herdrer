@@ -14,6 +14,12 @@ import { Button, cx, inputClass } from "../../components/ui";
  * bottom: 0`, because iOS Safari does not resize the layout viewport when the
  * keyboard opens — see lib/viewport.ts. When the note has focus the bar becomes
  * the note plus Send: bar + keyboard + option row is more than a phone has.
+ *
+ * Inside the overlay sheet it does not anchor itself at all (`anchored={false}`):
+ * the sheet is already sized to the visual viewport, so the bar is just the last
+ * row of a flex column. Two elements independently chasing `visualViewport`
+ * fight during the keyboard animation, and the loser is whichever one the thumb
+ * was aiming at.
  */
 export function ActionBar({
   item,
@@ -24,6 +30,8 @@ export function ActionBar({
   onSubmit,
   submitting,
   onMore,
+  anchored = true,
+  disabled = false,
 }: {
   item: ReviewItem;
   selected: string | null;
@@ -33,6 +41,10 @@ export function ActionBar({
   onSubmit: () => void;
   submitting: boolean;
   onMore: () => void;
+  /** False inside the sheet, whose own container already tracks the keyboard. */
+  anchored?: boolean;
+  /** Briefly true after an auto-raise, so an in-flight thumb cannot answer. */
+  disabled?: boolean;
 }) {
   const vv = useVisualViewport();
   const [noteOpen, setNoteOpen] = useState(false);
@@ -46,15 +58,16 @@ export function ActionBar({
 
   return (
     <div
-      style={{ ...keyboardAnchoredStyle(vv), zIndex: 30 }}
-      className="border-t border-border bg-surface-2"
+      style={anchored ? { ...keyboardAnchoredStyle(vv), zIndex: 30 } : undefined}
+      className="shrink-0 border-t border-border bg-surface-2"
     >
       <div
         className="mx-auto w-full max-w-3xl px-2 py-2"
         style={{
-          paddingBottom: vv.keyboardOpen
-            ? "0.5rem"
-            : "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+          paddingBottom:
+            vv.keyboardOpen || !anchored
+              ? "0.5rem"
+              : "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
         }}
       >
         {(noteOpen || freeText) && (
@@ -108,6 +121,7 @@ export function ActionBar({
                   <button
                     key={opt.key}
                     onClick={() => onSelect(opt.key)}
+                    disabled={disabled}
                     aria-pressed={isSel}
                     className={cx(
                       "h-11 shrink-0 whitespace-nowrap rounded-md border px-3 text-sm font-medium",
@@ -129,7 +143,7 @@ export function ActionBar({
             variant="primary"
             size="lg"
             className="shrink-0"
-            disabled={!canSend}
+            disabled={!canSend || disabled}
             loading={submitting}
             onClick={onSubmit}
           >

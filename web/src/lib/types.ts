@@ -165,3 +165,70 @@ export interface StreamEvent {
   counts?: { review_open: number; agents_blocked: number };
   [k: string]: unknown;
 }
+
+/* --- the herdr session tree -------------------------------------------------
+ *
+ * `GET /api/v1/herdr/state`. Transcribed from docs/API.md; the shape is
+ * workspace → tab → pane, with an agent hanging off a pane when herdr
+ * recognised one in it.
+ *
+ * `running:false` with an empty tree is an ordinary state, not an error — a box
+ * that has just booted may not have a herdr server yet. Nothing here may treat
+ * it as a failure.
+ */
+
+/** The agent occupying a pane. Same shape as a row of `/api/v1/agents`. */
+export interface HerdrAgent {
+  name: string;
+  kind: string;
+  status: string;
+  workspace?: string;
+  pane_id?: string;
+  title?: string;
+  cwd?: string;
+  focused?: boolean;
+  /** Present on the flat `/api/v1/agents` list, absent inside the tree. */
+  elapsed?: number;
+}
+
+export interface HerdrPane {
+  id: string;
+  tab_id: string;
+  workspace_id: string;
+  title: string;
+  cwd: string;
+  focused: boolean;
+  agent_status: string;
+  /** Absent when the pane holds a plain shell rather than a recognised agent. */
+  agent?: HerdrAgent;
+}
+
+export interface HerdrTab {
+  id: string;
+  workspace_id: string;
+  label: string;
+  number: number;
+  focused: boolean;
+  agent_status: string;
+  panes?: HerdrPane[] | null;
+}
+
+export interface HerdrWorkspace {
+  id: string;
+  label: string;
+  number: number;
+  focused: boolean;
+  agent_status: string;
+  tab_count: number;
+  pane_count: number;
+  tabs?: HerdrTab[] | null;
+}
+
+export interface HerdrState {
+  running: boolean;
+  version?: string;
+  protocol?: number;
+  blocked?: number;
+  workspaces?: HerdrWorkspace[] | null;
+  agents?: HerdrAgent[] | null;
+}

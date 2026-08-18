@@ -7,6 +7,7 @@ import type {
   Bootstrap,
   Credential,
   EnrollmentPermit,
+  HerdrState,
   ReviewItem,
   SessionRow,
   Task,
@@ -19,6 +20,7 @@ export const qk = {
   reviews: (status: string) => ["reviews", status] as const,
   review: (id: string) => ["review", id] as const,
   agents: ["agents"] as const,
+  herdrState: ["herdr", "state"] as const,
   tasks: ["tasks"] as const,
   credentials: ["credentials"] as const,
   sessions: ["sessions"] as const,
@@ -101,6 +103,23 @@ export function useAgents(enabled = true) {
     queryFn: () => api.get<AgentRow[]>("/api/v1/agents"),
     retry: retryUnlessAuth,
     refetchInterval: 15_000,
+    enabled,
+  });
+}
+
+/**
+ * The whole herdr session tree — workspace, tab, pane, agent.
+ *
+ * `running:false` is data, not a failure, so this query has no special error
+ * handling beyond the usual: the renderer is what tells the difference between
+ * "herdr is not up" and "the box did not answer".
+ */
+export function useHerdrState(enabled = true) {
+  return useQuery({
+    queryKey: qk.herdrState,
+    queryFn: () => api.get<HerdrState>("/api/v1/herdr/state"),
+    retry: retryUnlessAuth,
+    refetchInterval: 10_000,
     enabled,
   });
 }

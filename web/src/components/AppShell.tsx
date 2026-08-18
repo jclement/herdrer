@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { Bot, ChevronLeft, Inbox, Monitor, Moon, Settings, Sun } from "lucide-react";
+import { Bot, ChevronLeft, Inbox, Monitor, Moon, Settings, Sun, TerminalSquare } from "lucide-react";
 import { useTheme } from "../lib/theme";
 import { taglineForDate } from "../lib/taglines";
 import { cx } from "./ui";
@@ -43,8 +43,9 @@ export function Header({
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{title}</div>
 
         <nav className="hidden items-center gap-1 lg:flex">
-          <HeaderTab to="/" label="Review" />
+          <HeaderTab to="/" label="Terminal" exact />
           <HeaderTab to="/agents" label="Agents" />
+          <HeaderTab to="/inbox" label="Inbox" />
           <HeaderTab to="/settings" label="Settings" />
         </nav>
 
@@ -63,11 +64,11 @@ export function Header({
   );
 }
 
-function HeaderTab({ to, label }: { to: string; label: string }) {
+function HeaderTab({ to, label, exact }: { to: string; label: string; exact?: boolean }) {
   return (
     <Link
       to={to}
-      activeOptions={{ exact: to === "/" }}
+      activeOptions={{ exact: !!exact }}
       className="rounded px-2 py-1 text-xs text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
       activeProps={{ className: "bg-white/10 text-chrome-fg" }}
     >
@@ -76,29 +77,42 @@ function HeaderTab({ to, label }: { to: string; label: string }) {
   );
 }
 
+/**
+ * Four destinations, and the first one is herdr itself.
+ *
+ * `embedded` drops the fixed positioning so the terminal route can put the nav
+ * inside its own flex column: that route owns the whole viewport and computes
+ * the PTY's height from what is left, so a `position: fixed` bar would sit on
+ * top of the bottom two rows of the shell rather than beside them.
+ */
 export function BottomNav({
   reviewBadge,
   agentBadge,
   warnMore,
+  embedded,
 }: {
   reviewBadge: number;
   agentBadge: number;
   warnMore?: boolean;
+  embedded?: boolean;
 }) {
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-2 lg:hidden"
+      className={cx(
+        "border-t border-border bg-surface-2",
+        embedded ? "shrink-0" : "fixed inset-x-0 bottom-0 z-30 lg:hidden",
+      )}
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="grid grid-cols-3">
+      <div className="grid grid-cols-4">
+        <NavTab to="/" exact icon={<TerminalSquare className="w-4 h-4" />} label="Terminal" />
+        <NavTab to="/agents" icon={<Bot className="w-4 h-4" />} label="Agents" badge={agentBadge} />
         <NavTab
-          to="/"
-          exact
+          to="/inbox"
           icon={<Inbox className="w-4 h-4" />}
-          label="Review"
+          label="Inbox"
           badge={reviewBadge}
         />
-        <NavTab to="/agents" icon={<Bot className="w-4 h-4" />} label="Agents" badge={agentBadge} />
         <NavTab
           to="/settings"
           icon={<Settings className="w-4 h-4" />}

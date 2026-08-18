@@ -145,6 +145,30 @@ exactly. A bearer token is refused on both sockets unconditionally.
 `/ws/stream` is JSON text frames: `{"type":"review.created"|"review.answered"|
 "agent.status"|"counts", …}`.
 
+## Pasting an image at an agent
+
+```
+POST /api/v1/paste        raw image bytes, or multipart with field "image"
+                       -> {path, content_type, bytes}
+```
+
+A terminal cannot carry an image: xterm.js hands the page a `File` on paste,
+but the far end is a byte stream, and the escape sequences that exist for
+images are for *display*, not for handing a file to a program. Both Claude Code
+and Codex will read an image given a path, so the image travels out of band
+over HTTP and what goes down the PTY is text.
+
+The client then writes `<path>` into the terminal websocket on lane `0x00` —
+exactly as if it had been typed. **No new wire protocol is involved.**
+
+The returned path is safe to inject by construction, not by escaping: the
+directory is fixed (`<state>/pastes/`, 0700), the basename is server-generated
+hex, and the extension comes from sniffing the bytes against a closed set
+(png/jpeg/gif/webp). Nothing in the path originates with the caller, so there
+is no traversal to block, no leading dash for the next command to parse as a
+flag, and no metacharacter to quote. Non-images are refused, 12 MiB cap, files
+reaped after 24 hours.
+
 ## Push
 
 ```
