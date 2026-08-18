@@ -21,7 +21,9 @@ import {
   nextWakeAt,
   type QueueCtx,
 } from "../../lib/reviewQueue";
+import type { QueueItem } from "../../lib/reviewQueue";
 import { shortAge } from "../../lib/format";
+import { useIsDesktop } from "../../lib/layout";
 import { useVisualViewport } from "../../lib/viewport";
 import { Chip, EmptyState, cx } from "../../components/ui";
 import { Sheet } from "../../components/Sheet";
@@ -42,11 +44,24 @@ import { ReviewSheet } from "./ReviewSheet";
  * It sits above the router outlet so an item can rise over the terminal, the
  * agents board or settings alike, and stays out of the way on the two routes
  * that are already review surfaces.
+ *
+ * All of that is the phone. On a desktop none of it fires: the queue is a rail
+ * beside the terminal (features/review/ReviewRail.tsx), fed from `items` here,
+ * and the only overlay is the sheet — reused verbatim as the modal a rail row
+ * opens. One queue, one document component, two presentations.
  */
 
 export interface ReviewQueueApi {
   /** Every open item — the badge. */
   open: number;
+  /**
+   * Every open item, in queue order, for a surface that shows the whole list
+   * rather than one of it: the desktop rail. The overlays use `sheetId` and
+   * `peekId` instead — those are the queue's *decision*, and this is its data.
+   */
+  items: QueueItem[];
+  /** Dismissed without answering, this session. Still listed, no longer competing. */
+  deferred: string[];
   /** Open items other than the one on screen. */
   waiting: number;
   /** The item currently presented as a sheet, if any. */
@@ -67,6 +82,8 @@ const noop = () => {};
 
 const Ctx = createContext<ReviewQueueApi>({
   open: 0,
+  items: [],
+  deferred: [],
   waiting: 0,
   sheetId: null,
   peekId: null,
@@ -81,8 +98,9 @@ export function useReviewQueue(): ReviewQueueApi {
   return useContext(Ctx);
 }
 
-/** Only the two timing fields matter to nextWakeAt; the rest is filler. */
+/** Only `desktop` and the two timing fields matter to nextWakeAt; the rest is filler. */
 const EMPTY_CTX: QueueCtx = {
+  desktop: false,
   interactive: false,
   inputHot: false,
   suppressed: false,
@@ -99,6 +117,7 @@ function isSuppressed(pathname: string): boolean {
 
 export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const desktop = useIsDesktop();
   const reviews = useReviews("all");
 
   const [deferred, setDeferred] = useState<string[]>([]);
@@ -120,6 +139,7 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   );
 
   const ctx: QueueCtx = {
+    desktop,
     interactive,
     inputHot: hot,
     suppressed: isSuppressed(path),
@@ -142,9 +162,21 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
    * the human still typing, and then never arm again.
    */
   useEffect(() => {
+    // Desktop: nothing raises itself, so there is no transition to wait for.
+    // Clearing `hot` on the way in matters — a window dragged wide while the
+    // human was typing would otherwise leave it stuck true, and stuck-true is
+    // exactly "no question may take the screen" once the window narrows again.
+    if (desktop) {
+      setHot(false);
+      return;
+    }
     let timer = 0;
     const wakeIn = (now: number) => {
-      const wake = nextWakeAt({ ...EMPTY_CTX, cooldownUntil }, hot ? lastInputRef.current : 0, now);
+      const wake = nextWakeAt(
+        { ...EMPTY_CTX, desktop, cooldownUntil },
+        hot ? lastInputRef.current : 0,
+        now,
+      );
       return wake === null ? null : Math.max(16, wake - now);
     };
 
@@ -160,13 +192,16 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
     if (delay === null) return;
     timer = window.setTimeout(step, delay);
     return () => window.clearTimeout(timer);
-  }, [hot, cooldownUntil]);
+  }, [hot, cooldownUntil, desktop]);
 
   const noteInput = useCallback(() => {
     lastInputRef.current = Date.now();
+    // Nothing on a desktop consults the hot window, and this is called once per
+    // character — so do not put React to work deciding it has nothing to do.
+    if (desktop) return;
     // setState with the same value is a no-op, so this is safe per keystroke.
     setHot(true);
-  }, []);
+  }, [desktop]);
 
   const setInteractive = useCallback((next: boolean) => setInteractiveState(next), []);
 
@@ -176,6 +211,19 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
     setPinned(id);
     setQuietSince(null);
     setStackOpen(false);
+  }, []);
+
+  /*
+   * Closing a modal you opened yourself is not deferring.
+   *
+   * On a phone, dismissing is a decision — the item was put in front of you and
+   * you put it down, so it stops competing for the screen. On a desktop you
+   * clicked a row in a rail that is still sitting there; closing it again means
+   * nothing more than "not this one", and marking it deferred would only put a
+   * misleading chip on a row you can see.
+   */
+  const unpin = useCallback((id: string) => {
+    setPinned((p) => (p === id ? null : p));
   }, []);
 
   const defer = useCallback((id: string) => {
@@ -191,9 +239,13 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
     setQuietSince(Date.now());
   }, []);
 
+  const ordered = useMemo(() => sortQueue(pending), [pending]);
+
   const api = useMemo<ReviewQueueApi>(
     () => ({
       open: plan.open,
+      items: ordered,
+      deferred,
       waiting: plan.waiting,
       sheetId: plan.sheet,
       peekId: plan.peek,
@@ -203,10 +255,19 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
       defer,
       openStack: () => setStackOpen(true),
     }),
-    [plan.open, plan.waiting, plan.sheet, plan.peek, setInteractive, noteInput, openItem, defer],
+    [
+      plan.open,
+      plan.waiting,
+      plan.sheet,
+      plan.peek,
+      ordered,
+      deferred,
+      setInteractive,
+      noteInput,
+      openItem,
+      defer,
+    ],
   );
-
-  const ordered = useMemo(() => sortQueue(pending), [pending]);
   const peekItem = ordered.find((i) => i.id === plan.peek);
 
   return (
@@ -231,9 +292,12 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
           // Raised by the queue rather than by a tap: hold the controls inert
           // for a moment so a thumb already in flight cannot answer.
           armed={pinned === plan.sheet}
-          onClose={() => defer(plan.sheet!)}
+          onClose={() => (desktop ? unpin(plan.sheet!) : defer(plan.sheet!))}
           onAnswered={() => settle(plan.sheet!)}
-          onNext={plan.waiting > 0 ? () => defer(plan.sheet!) : undefined}
+          // "Show the next one" is a phone affordance: it exists because the
+          // rest of the queue is invisible behind the sheet. On a desktop the
+          // rest of the queue is a click away in the rail.
+          onNext={!desktop && plan.waiting > 0 ? () => defer(plan.sheet!) : undefined}
         />
       )}
 

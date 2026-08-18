@@ -79,7 +79,7 @@
 
   /* bright-black is dim/comment text in most agent output, so it has to be
      legible rather than decorative — #000 with a blur is not a colour. */
-  --term-bright-black: #55636f;
+  --term-bright-black: #606f7c;
   --term-bright-red: #ff8f92;
   --term-bright-green: #7ede9f;
   --term-bright-yellow: #f5c26b;

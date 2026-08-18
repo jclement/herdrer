@@ -43,6 +43,12 @@ import type { ReviewItem, Urgency } from "./types";
  *      sheets in a row. Something that arrives *after* that moment is a new
  *      event and may still interrupt, which is the whole point of `blocking`.
  *
+ * All of that is a policy for a phone, where the screen holds one thing. On a
+ * desktop the queue is a rail beside the terminal, permanently visible, and
+ * rule 0 swallows the rest: nothing interrupts, because there is nothing an
+ * interruption could tell you that the rail is not already telling you. See
+ * `QueueCtx.desktop`.
+ *
  * A synthesized `herdr` row (a TUI pane sitting at its own prompt) never raises
  * anything: it carries no document, so a sheet for it would be an empty sheet.
  * It counts, it lists, it does not interrupt.
@@ -69,6 +75,22 @@ export interface QueueItem {
 }
 
 export interface QueueCtx {
+  /**
+   * The desktop layout is on screen, which means the review rail is too.
+   *
+   * Everything above is a policy for a surface that can only show one thing at
+   * a time. A desktop shows the queue *beside* the terminal permanently, so
+   * there is nothing left for an interruption to accomplish: the human can
+   * already see what is waiting while they work. Nothing auto-raises and
+   * nothing peeks; a click on the rail opens the document as a modal, and that
+   * is an explicit open, which has always outranked every rule here.
+   *
+   * This also retires the hot-input suppression on desktop rather than leaving
+   * it to quietly do nothing — there is no stampede to prevent when nothing
+   * raises itself, and a rule that cannot fire is a rule that misleads whoever
+   * reads it next.
+   */
+  desktop: boolean;
   /** The human has taken control of the terminal. */
   interactive: boolean;
   /** A key reached the PTY within INPUT_HOT_MS. */
@@ -142,6 +164,7 @@ export function sortQueue(items: readonly QueueItem[]): QueueItem[] {
 
 /** Rule 2/3/4: may this item take the whole screen on its own initiative? */
 export function canAutoRaise(item: QueueItem, ctx: QueueCtx): boolean {
+  if (ctx.desktop) return false;
   if (ctx.suppressed) return false;
   if (item.provisional) return false;
   if (ctx.deferred.includes(item.id)) return false;
@@ -159,6 +182,7 @@ export function canAutoRaise(item: QueueItem, ctx: QueueCtx): boolean {
 
 /** May this item announce itself in the strip? Cheaper than a sheet, so: mostly. */
 export function canPeek(item: QueueItem, ctx: QueueCtx): boolean {
+  if (ctx.desktop) return false;
   if (ctx.suppressed) return false;
   if (ctx.deferred.includes(item.id)) return false;
   if (item.urgency === "low") return !ctx.interactive;
@@ -178,6 +202,11 @@ export function planQueue(items: readonly QueueItem[], ctx: QueueCtx, now: numbe
   if (ctx.pinned !== null && ordered.some((i) => i.id === ctx.pinned)) {
     return { sheet: ctx.pinned, peek: null, waiting: open - 1, open };
   }
+
+  // 1.5 — on a desktop the rail is permanently on screen, so an unasked-for
+  // overlay is a second copy of something already visible. Explicit opens were
+  // handled above; everything else is a row in the rail and nothing more.
+  if (ctx.desktop) return { sheet: null, peek: null, waiting: open, open };
 
   const eligible = ordered.filter((i) => !ctx.deferred.includes(i.id));
   if (eligible.length === 0) return { sheet: null, peek: null, waiting: open, open };
@@ -206,6 +235,9 @@ export function planQueue(items: readonly QueueItem[], ctx: QueueCtx, now: numbe
  * is a transition with no event behind it: nothing arrives, time simply passes.
  */
 export function nextWakeAt(ctx: QueueCtx, lastInputAt: number, now: number): number | null {
+  // On a desktop nothing raises itself, so no amount of time passing changes
+  // the plan — and the caller's re-render-per-keystroke loop never arms.
+  if (ctx.desktop) return null;
   const candidates: number[] = [];
   const hotUntil = lastInputAt + INPUT_HOT_MS;
   if (hotUntil > now) candidates.push(hotUntil);

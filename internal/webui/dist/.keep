@@ -1,3 +1,0 @@
-The SPA build output lands here (mise run web:build). This file is tracked so
-that //go:embed all:dist compiles on a fresh clone, before anyone has built the
-web assets; the binary then serves a placeholder page explaining what to run.

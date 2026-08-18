@@ -20,13 +20,16 @@ import { ApiError, api, describeError, wsURL } from "../../lib/api";
 import { stepUp } from "../../lib/stepup";
 import type { Ticket } from "../../lib/types";
 import { flags } from "../../lib/storage";
+import { useIsDesktop } from "../../lib/layout";
+import { cssReader, terminalFont, terminalTheme } from "../../lib/termTheme";
 import { useVisualViewport } from "../../lib/viewport";
 import { humanBytes, imageFromTransfer, sendImage, uploadPaste } from "../../lib/paste";
 import { useBootstrap } from "../../lib/queries";
 import { Button, cx } from "../../components/ui";
-import { BottomNav } from "../../components/AppShell";
+import { BottomNav, HeaderNav, ThemeToggle } from "../../components/AppShell";
 import { useToast } from "../../components/toast";
 import { useReviewQueue } from "../review/ReviewQueue";
+import { ReviewRail } from "../review/ReviewRail";
 
 /**
  * The wire format is in the API contract: the first byte of every frame is the
@@ -63,7 +66,9 @@ interface ImagePasteState {
  * you. Questions arrive on top of this (see features/review/ReviewQueue.tsx)
  * and dismiss back to it.
  *
- * Two ergonomics carry over from the old buried route and are load-bearing:
+ * This route is two layouts, not one responsive layout — see lib/layout.ts.
+ *
+ * On a phone, two ergonomics are load-bearing:
  *
  *   Read-only until you take control. A PTY that accepts input the moment it
  *   paints is a PTY that eats a stray tap on a train. Taking control is a
@@ -74,6 +79,18 @@ interface ImagePasteState {
  *   take control it is navigation; after, it is the modifier bar, because a
  *   phone keyboard has no ctrl, esc, tab or arrows. Releasing control gives the
  *   navigation back.
+ *
+ * On a desktop both of those are wrong, so neither is there:
+ *
+ *   Nothing to take. A stray tap is a thumb problem. A mouse pointer does not
+ *   brush against a shell while it scrolls, and a keyboard has ctrl, esc, tab
+ *   and arrows already — so the terminal is live the moment it connects, and
+ *   the bottom of the screen is the terminal, because the navigation is a menu
+ *   across the top and the queue is a rail down the right.
+ *
+ *   Nothing interrupts. The rail shows what is waiting *while* you work, which
+ *   is the one thing a phone cannot do, and a click on it opens the same
+ *   document the phone's sheet shows — as a modal, over the same component.
  */
 export function TerminalPage() {
   const search = useSearch({ from: "/" }) as { session?: string; pane?: string };
@@ -82,6 +99,7 @@ export function TerminalPage() {
   const vv = useVisualViewport();
   const queue = useReviewQueue();
   const boot = useBootstrap();
+  const desktop = useIsDesktop();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -114,6 +132,15 @@ export function TerminalPage() {
   });
 
   useEffect(() => setPaneHint(search.pane ?? null), [search.pane]);
+
+  /*
+   * Whether keystrokes reach the PTY.
+   *
+   * On a desktop this is simply true: read-only-until-you-ask exists to stop a
+   * thumb, and there is no thumb. Keeping the gate there would be friction that
+   * reads as the terminal being broken, which is what it was reported as.
+   */
+  const holding = desktop || interactive;
 
   const encoder = useMemo(() => new TextEncoder(), []);
 
@@ -165,18 +192,17 @@ export function TerminalPage() {
   // Build the terminal once; font size changes are applied in place.
   useEffect(() => {
     if (!hostRef.current) return;
-    const css = getComputedStyle(document.documentElement);
+    const read = cssReader();
     const term = new Terminal({
-      fontFamily: css.getPropertyValue("--font-mono").trim() || "monospace",
+      fontFamily: terminalFont(read),
       fontSize,
       cursorBlink: true,
       convertEol: false,
       scrollback: 2000,
-      theme: {
-        background: css.getPropertyValue("--color-surface").trim() || "#0f141a",
-        foreground: css.getPropertyValue("--color-body").trim() || "#c2ccd7",
-        cursor: css.getPropertyValue("--color-accent").trim() || "#4aa8ff",
-      },
+      // The full sixteen plus background, foreground, cursor and selection, out
+      // of styles.css — see lib/termTheme.ts. Three of them was why an agent's
+      // colours came out as whatever xterm's defaults happened to be.
+      theme: terminalTheme(read),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -208,6 +234,28 @@ export function TerminalPage() {
       fitRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * Follow the theme toggle without dropping the PTY.
+   *
+   * `applyTheme` decides light from dark by toggling one class on <html>, and
+   * that is true for the system option too — so watching that attribute catches
+   * the toggle and an OS-level switch alike, with no second subscription. The
+   * repaint is an assignment: rebuilding the Terminal would close the socket
+   * and throw away the scrollback to change a background colour.
+   */
+  useEffect(() => {
+    const repaint = () => {
+      const term = termRef.current;
+      if (term) term.options.theme = terminalTheme(cssReader());
+    };
+    const observer = new MutationObserver(repaint);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -341,6 +389,34 @@ export function TerminalPage() {
     }
   };
 
+  /*
+   * The PTY follows the box, whatever changed the box.
+   *
+   * The viewport effect below covers the phone's case — the keyboard opening —
+   * but on a desktop the terminal is sized by flexbox, and the things that
+   * resize it (the window, a status strip arriving under it) produce no
+   * viewport event at all. Debounced, because a window drag produces a hundred
+   * of these and each one would otherwise be a control frame.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    let timer = 0;
+    const observer = new ResizeObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        fitRef.current?.fit();
+        const term = termRef.current;
+        if (term) sendControl({ type: "resize", cols: term.cols, rows: term.rows });
+      }, 100);
+    });
+    observer.observe(host);
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [sendControl]);
+
   // The PTY follows the visible area, so rows are never hidden behind the keyboard.
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -354,11 +430,23 @@ export function TerminalPage() {
   // Whether the human holds the terminal is what decides if a `normal` question
   // may take the screen, so the queue has to know.
   useEffect(() => {
-    queue.setInteractive(interactive);
+    queue.setInteractive(holding);
     // Leaving the terminal releases it: nothing else on the app sets this, and a
     // stale `true` would keep `normal` questions peeking forever on /agents.
     return () => queue.setInteractive(false);
-  }, [interactive, queue]);
+  }, [holding, queue]);
+
+  /*
+   * On a desktop the terminal is the page, so it takes the keyboard as soon as
+   * it has one to give it to. Autofocus is usually a rudeness; here the alt is
+   * a live shell you have to click before it will accept the command you
+   * already started typing.
+   */
+  useEffect(() => {
+    if (!desktop || phase !== "open") return;
+    if (queue.sheetId !== null) return;
+    termRef.current?.focus();
+  }, [desktop, phase, queue.sheetId]);
 
   /*
    * Handing focus over, and taking it back.
@@ -377,8 +465,8 @@ export function TerminalPage() {
       term.blur();
       return;
     }
-    if (interactive) term.focus();
-  }, [sheetId, interactive]);
+    if (holding) term.focus();
+  }, [sheetId, holding]);
 
   const takeControl = () => {
     setInteractive(true);
@@ -392,7 +480,7 @@ export function TerminalPage() {
   };
 
   const pressKey = (seq: string) => {
-    if (!interactive) return;
+    if (!holding) return;
     queue.noteInput();
     sendText(seq);
     if (sticky.lock === null && (sticky.ctrl || sticky.alt)) {
@@ -436,7 +524,7 @@ export function TerminalPage() {
    */
   const putImage = useCallback(
     async (file: File | Blob, label?: string) => {
-      if (!interactive) {
+      if (!holding) {
         toast.show("Take control first — the terminal is read-only until you do.");
         return;
       }
@@ -460,7 +548,7 @@ export function TerminalPage() {
       });
       if (ok) setImagePaste(null);
     },
-    [interactive, queue, sendText, toast],
+    [holding, queue, sendText, toast],
   );
 
   /*
@@ -494,7 +582,16 @@ export function TerminalPage() {
     void putImage(file);
   };
 
-  const chrome = interactive ? 96 : 48 + 56; // key bar, or read-only bar plus nav
+  /*
+   * How much of the viewport is not terminal.
+   *
+   * Desktop has nothing below the terminal at all — no take-control bar, no
+   * modifier bar, no bottom nav — so it is zero, and the terminal gets every
+   * row between the menu and the bottom of the window. That is the "terminal
+   * takes most of the screen" half of the desktop design; the rail takes width,
+   * not height.
+   */
+  const chrome = desktop ? 0 : interactive ? 96 : 48 + 56; // key bar, or read-only bar plus nav
   const termHeight = Math.max(
     120,
     vv.height - 40 - chrome - (paneHint ? 28 : 0) - (imagePaste ? 36 : 0),
@@ -507,6 +604,9 @@ export function TerminalPage() {
         style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
         <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
+        {/* The desktop's navigation. Below `lg` it renders nothing and the
+            bottom nav is the navigation instead. */}
+        <HeaderNav />
         {/* The default session is the common case and needs no label; a named
             one does, because it is a different herdr server entirely. */}
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
@@ -524,7 +624,10 @@ export function TerminalPage() {
         >
           {phase}
         </span>
-        {queue.open > 0 && (
+        {/* The bell is the phone's way to reach the queue. On a desktop the
+            rail is already showing it, and a second count is just a second
+            thing to keep in sync. */}
+        {queue.open > 0 && !desktop && (
           <button
             onClick={queue.openStack}
             aria-label={`${queue.open} waiting on you`}
@@ -537,54 +640,105 @@ export function TerminalPage() {
           </button>
         )}
         <FontControl size={fontSize} onChange={setFontSize} />
+        {desktop && (
+          <button
+            aria-label="Send an image"
+            title="Send an image to herdr's focused pane"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </button>
+        )}
+        {desktop && <ThemeToggle />}
       </header>
 
-      {paneHint && (
-        <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2 text-[11px] text-muted">
-          <span className="truncate">
-            you came from pane <span className="font-mono text-heading">{paneHint}</span> — herdr
-            has no focus-by-id over HTTP, so switch to it in the TUI
-          </span>
-          <button
-            aria-label="Dismiss"
-            onClick={() => setPaneHint(null)}
-            className="ml-auto shrink-0 p-1"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
+      {/*
+        The desktop split: the terminal column takes the width that is left, and
+        the review rail takes a fixed 20rem of it. Below `lg` the rail is not
+        rendered at all — not hidden — so the terminal's own arithmetic never
+        has to know about it.
+      */}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {paneHint && (
+            <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2 text-[11px] text-muted">
+              <span className="truncate">
+                you came from pane <span className="font-mono text-heading">{paneHint}</span> —
+                herdr has no focus-by-id over HTTP, so switch to it in the TUI
+              </span>
+              <button
+                aria-label="Dismiss"
+                onClick={() => setPaneHint(null)}
+                className="ml-auto shrink-0 p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
-      <div
-        className="relative min-h-0 flex-1 overflow-hidden"
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <div
-          ref={hostRef}
-          className="h-full overflow-hidden px-1"
-          style={{ height: termHeight, touchAction: "manipulation" }}
-        />
-        {dragging && (
-          <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded border-2 border-dashed border-accent bg-surface/80 text-sm text-accent">
-            Drop an image to hand it to the agent
+          <div
+            className="relative min-h-0 flex-1 overflow-hidden"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
+            {/*
+              On a phone the height is arithmetic against the *visual* viewport,
+              because that is the only thing that tracks the software keyboard.
+              On a desktop there is no keyboard to track and there are optional
+              strips below the terminal, so let flexbox size it and let the
+              ResizeObserver above tell the PTY what happened.
+            */}
+            <div
+              ref={hostRef}
+              className="h-full overflow-hidden px-1"
+              style={{
+                ...(desktop ? null : { height: termHeight }),
+                touchAction: "manipulation",
+              }}
+            />
+            {dragging && (
+              <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded border-2 border-dashed border-accent bg-surface/80 text-sm text-accent">
+                Drop an image to hand it to the agent
+              </div>
+            )}
+            {gate && (
+              <StepUpGate
+                gate={gate}
+                busy={asserting}
+                onAssert={() => void authorise()}
+                failure={failure}
+              />
+            )}
           </div>
-        )}
-        {gate && (
-          <StepUpGate
-            gate={gate}
-            busy={asserting}
-            onAssert={() => void authorise()}
-            failure={failure}
-          />
+
+          {imagePaste && (
+            <ImagePasteStrip state={imagePaste} onDismiss={() => setImagePaste(null)} />
+          )}
+
+          {failure && !gate && (
+            <div className="shrink-0 border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+              {failure}
+            </div>
+          )}
+          {phase === "closed" && !failure && !gate && (
+            <div className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted">
+              <span className="flex-1">The socket closed. Tickets are single use.</span>
+              <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                Reconnect
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {desktop && (
+          <ReviewRail items={queue.items} deferred={queue.deferred} onOpen={queue.openItem} />
         )}
       </div>
-
-      {imagePaste && <ImagePasteStrip state={imagePaste} onDismiss={() => setImagePaste(null)} />}
 
       {/* The only route in on iOS, where a web terminal has no image paste at all. */}
       <input
@@ -599,21 +753,11 @@ export function TerminalPage() {
         }}
       />
 
-      {failure && !gate && (
-        <div className="shrink-0 border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
-          {failure}
-        </div>
-      )}
-      {phase === "closed" && !failure && !gate && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted">
-          <span className="flex-1">The socket closed. Tickets are single use.</span>
-          <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
-            Reconnect
-          </Button>
-        </div>
-      )}
-
-      {!interactive ? (
+      {/*
+        Nothing below the terminal on a desktop: no bar to press, no nav to make
+        room for. The keyboard already has every key the modifier bar supplies.
+      */}
+      {desktop ? null : !interactive ? (
         <>
           <div className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-2 px-3 py-2">
             <div className="flex-1 text-[11px] text-muted">

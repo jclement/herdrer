@@ -25,9 +25,6 @@ export function Header({
   back?: { to: string; label: string };
   right?: ReactNode;
 }) {
-  const { theme, cycle } = useTheme();
-  const ThemeIcon = THEME_ICON[theme];
-
   return (
     <header
       className="sticky top-0 z-30 bg-chrome text-chrome-fg"
@@ -51,25 +48,52 @@ export function Header({
 
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{title}</div>
 
-        <nav className="hidden items-center gap-1 lg:flex">
-          <HeaderTab to="/" label="Terminal" exact />
-          <HeaderTab to="/agents" label="Agents" />
-          <HeaderTab to="/inbox" label="Inbox" />
-          <HeaderTab to="/settings" label="Settings" />
-        </nav>
+        <HeaderNav />
 
         {right}
 
-        <button
-          onClick={cycle}
-          aria-label={`Theme: ${theme}. Click to change.`}
-          title={`Theme: ${theme}`}
-          className="flex h-9 w-9 items-center justify-center rounded text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
-        >
-          <ThemeIcon className="w-4 h-4" />
-        </button>
+        <ThemeToggle />
       </div>
     </header>
+  );
+}
+
+/**
+ * The top menu — the desktop's navigation, where the phone has a bottom bar.
+ *
+ * Exported because the terminal route builds its own header rather than using
+ * the one above (it owns the whole viewport and cannot afford a sticky element
+ * it did not size), and two copies of the app's navigation is how the two
+ * copies end up listing different things.
+ */
+export function HeaderNav({ className }: { className?: string }) {
+  return (
+    <nav className={cx("hidden items-center gap-1 lg:flex", className)}>
+      <HeaderTab to="/" label="Terminal" exact />
+      <HeaderTab to="/agents" label="Agents" />
+      <HeaderTab to="/inbox" label="Inbox" />
+      <HeaderTab to="/settings" label="Settings" />
+    </nav>
+  );
+}
+
+/** System → Light → Dark → System, in the dark header, in both themes. */
+export function ThemeToggle({ className }: { className?: string }) {
+  const { theme, cycle } = useTheme();
+  const ThemeIcon = THEME_ICON[theme];
+  return (
+    <button
+      onClick={cycle}
+      aria-label={`Theme: ${theme}. Click to change.`}
+      title={`Theme: ${theme}`}
+      className={cx(
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted",
+        "hover:bg-white/10 hover:text-chrome-fg",
+        className,
+      )}
+    >
+      <ThemeIcon className="w-4 h-4" />
+    </button>
   );
 }
 
@@ -186,8 +210,12 @@ export function Footer({ version, host }: { version?: string; host?: string }) {
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <main
-      className={cx("mx-auto w-full max-w-3xl px-0 lg:px-4", className)}
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)" }}
+      className={cx(
+        "mx-auto w-full max-w-3xl px-0 lg:px-4",
+        // Room for the fixed bottom nav — which only exists below `lg`.
+        "pb-[calc(env(safe-area-inset-bottom,0px)+4.5rem)] lg:pb-6",
+        className,
+      )}
     >
       {children}
     </main>

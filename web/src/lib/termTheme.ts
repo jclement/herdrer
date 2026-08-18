@@ -16,8 +16,9 @@ import type { ITheme } from "@xterm/xterm";
  * background.
  */
 
-/** The token each ITheme field is read from. */
-const TOKENS = {
+/** The token each ITheme field is read from. Exported so a test can check
+ *  styles.css actually declares all of them. */
+export const TOKENS = {
   background: "--term-bg",
   foreground: "--term-fg",
   cursor: "--term-cursor",
@@ -68,7 +69,7 @@ export const TERM_FALLBACK: Record<TermField, string> = {
   magenta: "#c58af9",
   cyan: "#3fc7c7",
   white: "#c2ccd7",
-  brightBlack: "#55636f",
+  brightBlack: "#606f7c",
   brightRed: "#ff8f92",
   brightGreen: "#7ede9f",
   brightYellow: "#f5c26b",

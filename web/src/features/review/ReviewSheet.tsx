@@ -119,7 +119,10 @@ export function ReviewSheet({
         aria-hidden
         data-testid="review-sheet-scrim"
       />
-      <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col border-t border-border bg-surface sm:my-4 sm:rounded sm:border">
+      {/* Full-bleed on a phone, a centred panel above `sm`, and wider again on
+          a desktop — where this is the meatprompt modal the rail opens and a
+          diff has room to be read rather than scrolled sideways. */}
+      <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col border-t border-border bg-surface sm:my-4 sm:rounded sm:border lg:my-8 lg:max-w-4xl">
         <SheetHeader
           item={item}
           waiting={waiting}

@@ -29,6 +29,7 @@ function item(id: string, urgency: Urgency, ageMinutes = 0, provisional = false)
 
 function ctx(over: Partial<QueueCtx> = {}): QueueCtx {
   return {
+    desktop: false,
     interactive: false,
     inputHot: false,
     suppressed: false,
@@ -254,5 +255,44 @@ describe("nextWakeAt", () => {
 
   it("returns null when only new data could change the plan", () => {
     expect(nextWakeAt(ctx(), T0 - INPUT_HOT_MS * 2, T0)).toBeNull();
+  });
+});
+
+describe("the desktop layout", () => {
+  const items = [item("blocking", "blocking"), item("normal", "normal", 5)];
+
+  it("never raises and never peeks — the rail is already on screen", () => {
+    const plan = planQueue(items, ctx({ desktop: true }), T0);
+    expect(plan).toEqual({ sheet: null, peek: null, waiting: 2, open: 2 });
+  });
+
+  it("still opens what the human clicked, because that is not an interruption", () => {
+    const plan = planQueue(items, ctx({ desktop: true, pinned: "normal" }), T0);
+    expect(plan.sheet).toBe("normal");
+    expect(plan.waiting).toBe(1);
+  });
+
+  it("does not let a hot keyboard suppress anything, because nothing was going to fire", () => {
+    const typing = planQueue(items, ctx({ desktop: true, inputHot: true, interactive: true }), T0);
+    const quiet = planQueue(items, ctx({ desktop: true }), T0);
+    expect(typing).toEqual(quiet);
+  });
+
+  it("keeps the whole queue countable even when none of it is on the screen", () => {
+    const plan = planQueue(items, ctx({ desktop: true, deferred: ["blocking", "normal"] }), T0);
+    expect(plan.open).toBe(2);
+  });
+
+  it("arms no timer at all: no transition happens without an event", () => {
+    expect(nextWakeAt(ctx({ desktop: true }), T0, T0 + 100)).toBeNull();
+    expect(nextWakeAt(ctx({ desktop: true, cooldownUntil: T0 + 500 }), T0, T0 + 100)).toBeNull();
+  });
+
+  it("refuses both presentations item by item, not only as a whole plan", () => {
+    const blocking = item("b", "blocking");
+    expect(canAutoRaise(blocking, ctx({ desktop: true }))).toBe(false);
+    expect(canPeek(blocking, ctx({ desktop: true }))).toBe(false);
+    // …and the phone is untouched by any of it.
+    expect(canAutoRaise(blocking, ctx({ desktop: false }))).toBe(true);
   });
 });
