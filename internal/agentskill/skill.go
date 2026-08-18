@@ -85,8 +85,28 @@ const skillTemplate = "---\n" +
 	"- **Title**: the actual question, not a topic. \"Drop the legacy column?\" beats \"Migration\".\n" +
 	"- **First paragraph**: what happens if he picks each option. Consequences, not background.\n" +
 	"- **`detail` on each option**: the trade-off in one line — cost, reversibility, blast radius.\n" +
-	"- **Attach the real diff.** `{\"kind\":\"diff\"}`, not a description of a diff. Trim it to the\n" +
-	"  hunks that matter; a 300-line diff on a phone is a defer, not a decision.\n" +
+	"- **Attach the real diff.** `{\"kind\":\"diff\"}`, not a description of a diff.\n" +
+	"- **Better: send the whole files and let herdrer diff them.**\n" +
+	"  `{\"kind\":\"filediff\", \"title\":\"internal/api/routes.go\", \"language\":\"go\",\n" +
+	"    \"before\":\"…\", \"after\":\"…\"}` — herdrer computes the unified diff, adds a\n" +
+	"  `+n −n` count to the title, and keeps both originals so he can expand past the hunks\n" +
+	"  to the full file when the surrounding code is what he needs to see. Pass `\"context\": 3`\n" +
+	"  if you genuinely want it trimmed; the default is the whole file. **Prefer this over\n" +
+	"  hand-trimming a diff** — choosing which hunks to show is deciding what he is allowed to\n" +
+	"  notice, and the moments that matters most are the moments your judgement is the thing\n" +
+	"  being checked.\n" +
+	"- **Attach a picture when the evidence is visual** — a failing UI, a chart, a screenshot of\n" +
+	"  a stack trace. Upload it first, then reference the id:\n" +
+	"\n" +
+	"  ```sh\n" +
+	"  AID=$(curl -sS -X POST \"$HERDRER_URL/api/v1/agent/assets\" \\\n" +
+	"          -H \"Authorization: Bearer $HERDRER_TOKEN\" \\\n" +
+	"          --data-binary @screenshot.png | jq -r .data.asset_id)\n" +
+	"  # then in the review body:  {\"kind\":\"image\", \"asset_id\":\"$AID\", \"title\":\"the failure\"}\n" +
+	"  ```\n" +
+	"\n" +
+	"  PNG, JPEG, GIF or WebP, up to 4 MB, sniffed from the bytes. Images are inlined into the\n" +
+	"  document he reads, so keep them to what actually shows the problem.\n" +
 	"- **A mermaid diagram** (`{\"kind\":\"mermaid\"}`) when the shape of the thing is the question.\n" +
 	"- **Argue against yourself once.** The strongest reason not to do what you recommend.\n\n" +
 	"## Picking up work he queued\n\n" +

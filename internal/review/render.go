@@ -117,6 +117,11 @@ type Section struct {
 	// deep-link one attachment and show it as its own card, rather than
 	// framing the whole document for every diagram.
 	ID string
+
+	// ImageSrc is a data: URI for Kind == "image". A URL is deliberately not
+	// used: the frame is an opaque origin, where 'self' matches nothing and a
+	// subresource's cookie behaviour is subtle. data: cannot fail that way.
+	ImageSrc string
 }
 
 // Document renders a complete standalone HTML document for the iframe.
@@ -142,6 +147,21 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 	}
 	for _, s := range sections {
 		switch s.Kind {
+		case "image":
+			body.WriteString(`<figure class="img-wrap"` + anchor(s.ID) + `>`)
+			if s.ImageSrc == "" {
+				// The attachment referenced an asset that is gone. Say so — a
+				// blank space reads as a rendering bug rather than missing
+				// evidence, and the reader needs to know which it is.
+				body.WriteString(`<p class="missing">An image was attached here but could not be loaded.</p>`)
+			} else {
+				body.WriteString(`<img src="` + html2.EscapeString(s.ImageSrc) + `" alt="` +
+					html2.EscapeString(s.Title) + `" loading="lazy">`)
+			}
+			if s.Title != "" {
+				body.WriteString("<figcaption>" + html2.EscapeString(s.Title) + "</figcaption>")
+			}
+			body.WriteString(`</figure>`)
 		case "mermaid":
 			// The source is emitted as text inside a <pre>. If the diagram
 			// renderer fails to load, the reader sees the diagram source
@@ -180,17 +200,18 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 		}
 	}
 
-	theme := "light"
+	// No data-theme unless one was asked for: the stylesheet then follows the
+	// platform, which is right far more often than guessing light.
+	themeAttr := ""
 	if dark {
-		theme = "dark"
+		themeAttr = ` data-theme="dark"`
 	}
-
-	doc := `<!doctype html><html lang="en" data-theme="` + theme + `"><head>
+	doc := `<!doctype html><html lang="en"` + themeAttr + `><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-` + n + `' 'strict-dynamic'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>` + html2.EscapeString(title) + `</title>
-<style>` + rendererCSS + highlightCSS(dark) + `</style>
+<style>` + rendererCSS + highlightCSS() + `</style>
 </head><body>` + body.String() + `
 <script nonce="` + n + `">` + heightScript + diagramLoader(hasMermaid) + `</script>
 </body></html>`
@@ -254,10 +275,20 @@ func diagramLoader(enabled bool) string {
 }
 
 const rendererCSS = `
+/* Light is the base. Dark applies when the platform asks and nothing has
+   overridden it, and again when it is asked for explicitly so an in-app toggle
+   wins in both directions. The document therefore renders correctly even if
+   nobody passes ?theme=, which is how it ended up white inside a dark app. */
 :root{--bg:#fff;--fg:#1f2328;--muted:#656d76;--border:#d0d7de;--code-bg:#f6f8fa;
 --add:#1a7f37;--add-bg:#e6ffec;--del:#cf222e;--del-bg:#ffebe9}
-[data-theme=dark]{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;--code-bg:#161b22;
---add:#3fb950;--add-bg:#0f2f18;--del:#f85149;--del-bg:#3a1416}
+@media (prefers-color-scheme: dark){
+:root:not([data-theme="light"]){--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;
+--code-bg:#161b22;--add:#3fb950;--add-bg:#0f2f18;--del:#f85149;--del-bg:#3a1416}
+}
+:root[data-theme="dark"]{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;
+--code-bg:#161b22;--add:#3fb950;--add-bg:#0f2f18;--del:#f85149;--del-bg:#3a1416}
+:root[data-theme="light"]{--bg:#fff;--fg:#1f2328;--muted:#656d76;--border:#d0d7de;
+--code-bg:#f6f8fa;--add:#1a7f37;--add-bg:#e6ffec;--del:#cf222e;--del-bg:#ffebe9}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg)}
 body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;padding:2px 0 8px}
@@ -280,4 +311,9 @@ padding:.6em .7em;overflow-x:auto;overscroll-behavior-x:contain;margin:0 0 .8em;
 pre code{white-space:pre;display:block}
 .lang-diff code{white-space:pre}
 figure{margin:0 0 1em}
+.img-wrap img{max-width:100%;height:auto;display:block;border:1px solid var(--border);
+border-radius:6px;background:var(--code-bg)}
+.img-wrap figcaption{margin-top:.35em}
+.missing{color:var(--muted);font-style:italic;border:1px dashed var(--border);
+border-radius:6px;padding:.6em .7em;margin:0}
 `

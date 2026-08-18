@@ -131,6 +131,31 @@ func (s *Service) Create(ctx context.Context, userID, tokenID string, req Create
 	for i := range req.Attachments {
 		a := req.Attachments[i]
 		a.ID = "at_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+
+		// A filediff is diffed here, not by the agent. An agent that chooses
+		// which hunks to show is deciding what the human is allowed to notice,
+		// and the moments that matters most are the moments its judgement is
+		// the thing being checked.
+		if a.Kind == "filediff" {
+			unified, err := buildFileDiff(a.Title, a.Before, a.After, a.Context)
+			if err != nil {
+				return nil, err
+			}
+			if unified == "" {
+				// Identical files. Say so rather than rendering an empty box.
+				a.Kind = "markdown"
+				a.Content = "_No change: the before and after are identical._"
+			} else {
+				a.Content = unified
+				if a.Language == "" {
+					a.Language = "diff"
+				}
+				added, removed := diffStat(unified)
+				if a.Title != "" {
+					a.Title = fmt.Sprintf("%s  (+%d −%d)", a.Title, added, removed)
+				}
+			}
+		}
 		it.Attachments = append(it.Attachments, a)
 	}
 
@@ -209,11 +234,23 @@ func (s *Service) validate(req *CreateRequest) error {
 	for i, a := range req.Attachments {
 		switch a.Kind {
 		case "diff", "code", "markdown", "mermaid":
+			if len(a.Content) > 512*1024 {
+				return fmt.Errorf("%w: attachment %d is over 512 KiB; send it as a filediff instead",
+					ErrValidation, i)
+			}
+		case "image":
+			if a.AssetID == "" {
+				return fmt.Errorf("%w: attachment %d is an image and needs an asset_id "+
+					"from POST /api/v1/agent/assets", ErrValidation, i)
+			}
+		case "filediff":
+			if a.Before == "" && a.After == "" {
+				return fmt.Errorf("%w: attachment %d is a filediff and needs before and/or after",
+					ErrValidation, i)
+			}
 		default:
-			return fmt.Errorf("%w: attachment %d kind must be diff, code, markdown or mermaid", ErrValidation, i)
-		}
-		if len(a.Content) > 512*1024 {
-			return fmt.Errorf("%w: attachment %d is over 512 KiB; link to it instead", ErrValidation, i)
+			return fmt.Errorf("%w: attachment %d kind must be diff, code, markdown, mermaid, "+
+				"image or filediff", ErrValidation, i)
 		}
 	}
 	if len(req.BodyMD) > 512*1024 {

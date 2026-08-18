@@ -98,12 +98,32 @@ func lexerFor(lang string) chroma.Lexer {
 	return lexers.Get(lang)
 }
 
-// highlightCSS returns the stylesheet for the chosen theme.
-func highlightCSS(dark bool) string {
-	name := styleLight
-	if dark {
-		name = styleDark
-	}
+// highlightCSS returns both stylesheets, each scoped so the document picks the
+// right one on its own.
+//
+// Emitting only the requested theme made the document depend on the parent
+// remembering to pass ?theme=, and when it did not the result was a white page
+// inside a dark app. A document that is wrong unless someone else gets a query
+// parameter right is a document that will be wrong.
+func highlightCSS() string {
+	light := rawHighlightCSS(styleLight)
+	dark := rawHighlightCSS(styleDark)
+
+	var b strings.Builder
+	// Light is the base.
+	b.WriteString(light)
+	// Dark when the platform asks for it and nothing has overridden it...
+	b.WriteString("@media (prefers-color-scheme: dark){")
+	b.WriteString(scopeCSS(dark, `:root:not([data-theme="light"]) `))
+	b.WriteString("}")
+	// ...and whenever it is asked for explicitly, which must win in both
+	// directions.
+	b.WriteString(scopeCSS(dark, `:root[data-theme="dark"] `))
+	b.WriteString(scopeCSS(light, `:root[data-theme="light"] `))
+	return b.String()
+}
+
+func rawHighlightCSS(name string) string {
 	style := styles.Get(name)
 	if style == nil {
 		style = styles.Fallback
@@ -114,4 +134,34 @@ func highlightCSS(dark bool) string {
 		return ""
 	}
 	return buf.String()
+}
+
+// scopeCSS prefixes every selector in a stylesheet so it only applies inside a
+// scope. Chroma's output is a flat list of simple rules, which is what makes
+// this safe to do textually rather than with a CSS parser.
+func scopeCSS(css, scope string) string {
+	var b strings.Builder
+	for _, rule := range strings.Split(css, "}") {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		i := strings.Index(rule, "{")
+		if i < 0 {
+			continue
+		}
+		selectors := strings.Split(rule[:i], ",")
+		for j, sel := range selectors {
+			sel = strings.TrimSpace(sel)
+			// Strip chroma's leading comments, which sit before the selector.
+			if k := strings.LastIndex(sel, "*/"); k >= 0 {
+				sel = strings.TrimSpace(sel[k+2:])
+			}
+			selectors[j] = scope + sel
+		}
+		b.WriteString(strings.Join(selectors, ","))
+		b.WriteString(rule[i:])
+		b.WriteString("}")
+	}
+	return b.String()
 }

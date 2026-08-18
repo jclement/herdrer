@@ -100,6 +100,7 @@ func (s *Server) routes() http.Handler {
 		mux.Handle(pattern, chain(h, s.rateLimit(s.agentLimit), s.requireToken(scope)))
 	}
 	agent("POST /api/v1/agent/review", s.handleAgentCreateReview, "review:write")
+	agent("POST /api/v1/agent/assets", s.handleAgentUploadAsset, "review:write")
 	agent("GET /api/v1/agent/review/{id}", s.handleAgentGetReview, "review:read")
 	agent("DELETE /api/v1/agent/review/{id}", s.handleAgentCancelReview, "review:write")
 	agent("GET /api/v1/agent/review", s.handleAgentListReview, "review:read")

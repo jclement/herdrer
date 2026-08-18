@@ -141,9 +141,21 @@ func (s *Server) handleRenderReview(w http.ResponseWriter, r *http.Request) {
 		sections = append(sections, review.Section{Kind: "markdown", Content: it.BodyMD})
 	}
 	for _, a := range it.Attachments {
-		sections = append(sections, review.Section{
+		sec := review.Section{
 			ID: a.ID, Kind: a.Kind, Title: a.Title, Language: a.Language, Content: a.Content,
-		})
+		}
+		if a.Kind == "image" && a.AssetID != "" && s.assets != nil {
+			asset, err := s.st.GetReviewAsset(r.Context(), a.AssetID)
+			// Ownership is checked here, not only at upload: an attachment can
+			// name any asset id, and the item it hangs off has already been
+			// verified as this user's.
+			if err == nil && asset.UserID == it.UserID {
+				if uri, err := s.assets.DataURI(asset.ID, asset.MediaType); err == nil {
+					sec.ImageSrc = uri
+				}
+			}
+		}
+		sections = append(sections, sec)
 	}
 
 	doc, err := s.review.Renderer().Document(it.Title, sections, r.URL.Query().Get("theme") == "dark")
@@ -360,4 +372,50 @@ func (s *Server) handleAgentCompleteTask(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(r, "task.completed", r.PathValue("id"), nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAgentUploadAsset accepts an image from an agent and returns an id to
+// reference from a review attachment.
+//
+// Out of band rather than base64 in the review JSON: a screenshot inflates by a
+// third in base64, and putting it in the document body would mean raising the
+// request cap for every submission to accommodate the rare one that carries a
+// picture.
+func (s *Server) handleAgentUploadAsset(w http.ResponseWriter, r *http.Request) {
+	t := TokenFrom(r.Context())
+	if s.assets == nil {
+		Internal(w, errors.New("asset store not configured"), "assets")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, review.MaxAssetBytes+1024)
+
+	body := r.Body
+	if file, _, err := r.FormFile("image"); err == nil {
+		defer file.Close()
+		body = file
+	}
+
+	id, mediaType, size, err := s.assets.Save(body)
+	if err != nil {
+		if errors.Is(err, review.ErrUnsupportedAsset) {
+			WriteError(w, http.StatusBadRequest, CodeValidation,
+				"that does not look like a PNG, JPEG, GIF or WebP")
+			return
+		}
+		WriteError(w, http.StatusBadRequest, CodeValidation, "could not read the image")
+		return
+	}
+
+	if err := s.st.CreateReviewAsset(r.Context(), &store.ReviewAsset{
+		ID: id, UserID: t.UserID, TokenID: &t.ID, MediaType: mediaType,
+		Bytes: size, Path: s.assets.Path(id, mediaType), CreatedAt: time.Now(),
+	}); err != nil {
+		Internal(w, err, "record asset")
+		return
+	}
+
+	s.audit(r, "asset.uploaded", id, map[string]any{"type": mediaType, "bytes": size})
+	WriteJSON(w, http.StatusCreated, map[string]any{
+		"asset_id": id, "media_type": mediaType, "bytes": size,
+	})
 }

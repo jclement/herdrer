@@ -228,12 +228,47 @@ Create body:
   "kind": "confirm|choice|ack|manual|review",
   "options": [{"key":"A","label":"…","detail":"…"}],
   "recommend": "A",                // REQUIRED for choice and confirm
-  "attachments": [{"kind":"diff","title":"…","language":"diff","content":"…"}],
+  "attachments": [
+    {"kind":"diff","title":"…","language":"diff","content":"…"},
+    {"kind":"code","title":"…","language":"go","content":"…"},
+    {"kind":"mermaid","content":"flowchart LR\n A-->B"},
+    {"kind":"image","asset_id":"as_…","title":"the failing screen"},
+    {"kind":"filediff","title":"internal/api/routes.go","language":"go",
+     "before":"…","after":"…","context":0}
+  ],
   "context": {"repo":"…","branch":"…","worker":"…"},
   "urgency": "low|normal|blocking",
   "expires_in_hours": 12
 }
 ```
+
+### Attachments
+
+| kind | carries | rendered as |
+|---|---|---|
+| `diff` | a unified diff in `content` | syntax-highlighted diff |
+| `code` | source in `content` + `language` | syntax-highlighted code |
+| `markdown` | markdown in `content` | rendered, sanitised |
+| `mermaid` | diagram source in `content` | rendered diagram, source on failure |
+| `image` | `asset_id` from the upload below | inlined as a data URI |
+| `filediff` | `before` and `after` whole files | **server-computed** unified diff |
+
+`filediff` is the one to prefer for code review. The agent sends whole files and
+herdrer does the diffing, with **full file context by default** — pass
+`context: n` to trim. Both originals are kept so the reader can expand past the
+hunks. An agent choosing which hunks to show is deciding what the human is
+allowed to notice.
+
+```
+POST /api/v1/agent/assets    raw image bytes, or multipart field "image"
+                          -> {asset_id, media_type, bytes}
+```
+
+PNG/JPEG/GIF/WebP, sniffed from the bytes, 4 MiB cap. Scope `review:write`.
+Images are inlined into the rendered document as data URIs rather than linked:
+the document renders in an opaque-origin sandboxed iframe where `'self'` matches
+nothing and a subresource's cookie behaviour is subtle, and a picture that
+sometimes fails to load is worse than a larger document.
 
 A `choice` or `confirm` with no `recommend` is refused with `VALIDATION_ERROR`.
 Presenting options with no opinion offloads the thinking onto the expensive

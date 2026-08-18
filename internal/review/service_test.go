@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -370,8 +371,194 @@ func TestDocumentCarriesTheHighlightStylesheet(t *testing.T) {
 			t.Errorf("dark=%v: document has no chroma stylesheet", dark)
 		}
 	}
-	// The two themes must not produce the same stylesheet, or one of them is wrong.
-	if highlightCSS(false) == highlightCSS(true) {
-		t.Error("light and dark produce an identical stylesheet")
+	// One stylesheet now carries both palettes, so the dark half must be
+	// scoped rather than simply absent — otherwise code is unstyled in dark.
+	css := highlightCSS()
+	if !strings.Contains(css, `:root[data-theme="dark"] .chroma`) {
+		t.Error("no scoped dark rules; highlighted code would be unstyled in dark mode")
+	}
+	if !strings.Contains(css, "@media (prefers-color-scheme: dark)") {
+		t.Error("no platform-preference rules")
+	}
+}
+
+// TestFileDiffIsComputedServerSide is the point of the feature: the agent sends
+// whole files and herdrer decides what the diff looks like. An agent choosing
+// which hunks to show is an agent deciding what the human is allowed to notice.
+func TestFileDiffIsComputedServerSide(t *testing.T) {
+	svc, st, uid, tokID := newTestService(t)
+	ctx := context.Background()
+
+	before := "package main\n\nfunc main() {\n\tprintln(\"old\")\n}\n"
+	after := "package main\n\nfunc main() {\n\tprintln(\"new\")\n}\n"
+
+	it, err := svc.Create(ctx, uid, tokID, CreateRequest{
+		Title: "rename", Kind: KindConfirm, Recommend: "yes",
+		Attachments: []store.Attachment{{
+			Kind: "filediff", Title: "main.go", Before: before, After: after,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetReviewItem(ctx, it.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := got.Attachments[0]
+
+	if !strings.Contains(a.Content, `-	println("old")`) || !strings.Contains(a.Content, `+	println("new")`) {
+		t.Fatalf("unified diff missing the change:\n%s", a.Content)
+	}
+	if a.Language != "diff" {
+		t.Errorf("language = %q, want diff", a.Language)
+	}
+	// The originals survive, so the reader can expand past the hunks.
+	if a.Before != before || a.After != after {
+		t.Error("the before/after originals were not kept")
+	}
+	// And the title carries the shape of the change.
+	if !strings.Contains(a.Title, "+1") || !strings.Contains(a.Title, "1") {
+		t.Errorf("title lacks a diffstat: %q", a.Title)
+	}
+}
+
+// TestFileDiffDefaultsToTheWholeFile checks that context is not silently
+// truncated, which would defeat "so you can see a full diff when you need it".
+func TestFileDiffDefaultsToTheWholeFile(t *testing.T) {
+	var before strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&before, "line %d\n", i)
+	}
+	after := strings.Replace(before.String(), "line 100\n", "line 100 CHANGED\n", 1)
+
+	unified, err := buildFileDiff("big.txt", before.String(), after, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Full context means the untouched top and bottom of the file are present.
+	for _, must := range []string{"line 0", "line 199", "+line 100 CHANGED"} {
+		if !strings.Contains(unified, must) {
+			t.Errorf("full-context diff is missing %q", must)
+		}
+	}
+
+	// An explicit context narrows it, for an agent that wants to.
+	narrow, err := buildFileDiff("big.txt", before.String(), after, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(narrow, "line 0\n") {
+		t.Error("context=2 still included the whole file")
+	}
+}
+
+// TestIdenticalFilesSaySo — an empty diff box reads as a rendering bug.
+func TestIdenticalFilesSaySo(t *testing.T) {
+	svc, st, uid, tokID := newTestService(t)
+	ctx := context.Background()
+	it, err := svc.Create(ctx, uid, tokID, CreateRequest{
+		Title: "no change", Kind: KindAck,
+		Attachments: []store.Attachment{{
+			Kind: "filediff", Title: "same.go", Before: "a\n", After: "a\n",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetReviewItem(ctx, it.ID)
+	if !strings.Contains(got.Attachments[0].Content, "identical") {
+		t.Errorf("identical files rendered as %q", got.Attachments[0].Content)
+	}
+}
+
+// TestCRLFDoesNotDiffAsEveryLine catches the classic false diff from a file
+// that came off a Windows checkout.
+func TestCRLFDoesNotDiffAsEveryLine(t *testing.T) {
+	unified, err := buildFileDiff("x.txt", "a\r\nb\r\nc\r\n", "a\nb\nc\n", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unified != "" {
+		t.Errorf("line endings alone produced a diff:\n%s", unified)
+	}
+}
+
+// TestImageAttachmentNeedsAnAsset keeps a dangling reference from rendering as
+// a blank space, which reads as a bug rather than as missing evidence.
+func TestImageAttachmentNeedsAnAsset(t *testing.T) {
+	svc, _, uid, tokID := newTestService(t)
+	_, err := svc.Create(context.Background(), uid, tokID, CreateRequest{
+		Title: "look at this", Kind: KindAck,
+		Attachments: []store.Attachment{{Kind: "image", Title: "screenshot"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "asset_id") {
+		t.Fatalf("an image with no asset_id was accepted: %v", err)
+	}
+}
+
+// TestImageRendersInlineAndMissingIsExplicit covers both halves of the render.
+func TestImageRendersInlineAndMissingIsExplicit(t *testing.T) {
+	r := NewRenderer()
+
+	withImage, err := r.Document("t", []Section{{
+		Kind: "image", ID: "at_1", Title: "the failure",
+		ImageSrc: "data:image/png;base64,iVBORw0KGgo=",
+	}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(withImage, `<img src="data:image/png;base64,`) {
+		t.Error("image was not inlined as a data URI")
+	}
+	if !strings.Contains(withImage, "the failure") {
+		t.Error("caption lost")
+	}
+
+	missing, err := r.Document("t", []Section{{Kind: "image", ID: "at_2", Title: "gone"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(missing, "could not be loaded") {
+		t.Error("a missing image rendered silently; the reader cannot tell evidence is absent")
+	}
+}
+
+// TestDocumentIsDarkWithoutBeingToldTo is the regression for a white review
+// document inside a dark app.
+//
+// The renderer used to bake the palette from a ?theme= query parameter and
+// default to light, so any caller that forgot the parameter got a white page.
+// A document that is only correct when someone else remembers a query
+// parameter is a document that will be wrong.
+func TestDocumentIsDarkWithoutBeingToldTo(t *testing.T) {
+	r := NewRenderer()
+	doc, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "prefers-color-scheme: dark") {
+		t.Error("the document cannot follow the platform theme on its own")
+	}
+	// Check the html tag, not the stylesheet: a :root[data-theme="light"] rule
+	// is required so an explicit light choice wins, but the *element* must
+	// carry no theme unless one was asked for.
+	htmlTag := doc[strings.Index(doc, "<html") : strings.Index(doc, ">")+1]
+	if strings.Contains(htmlTag, "data-theme") {
+		t.Errorf("the document hardcodes a theme (%s), losing the platform preference", htmlTag)
+	}
+	// An explicit dark request must still win.
+	dark, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dark, `data-theme="dark"`) {
+		t.Error("an explicit dark request was not honoured")
+	}
+	// Both highlight palettes must ship, or code is unstyled in one of them.
+	for _, want := range []string{`:root[data-theme="dark"] .chroma`, `@media (prefers-color-scheme: dark)`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("stylesheet missing %q", want)
+		}
 	}
 }

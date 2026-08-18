@@ -144,7 +144,13 @@ func cmdServe(args []string) error {
 	pastes.StartReaper(stopReaper)
 	defer close(stopReaper)
 
-	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus, pastes, version)
+	assets, err := review.NewAssetStore(cfg.StateDir)
+	if err != nil {
+		return err
+	}
+
+	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus,
+		pastes, assets, version)
 
 	// Teach the agents on this box about herdrer, and give them a credential.
 	//

@@ -21,6 +21,7 @@ type Server struct {
 	terminal *terminal.Service
 	notify   *notify.Service
 	pastes   *paste.Store
+	assets   *review.AssetStore
 	ptys     *terminal.Manager
 	bus      *Bus
 	version  string
@@ -35,10 +36,10 @@ type Server struct {
 // NewServer wires the routes.
 func NewServer(cfg *config.Config, st *store.Store, a *auth.Service, rv *review.Service,
 	tm *terminal.Service, ptys *terminal.Manager, nt *notify.Service, bus *Bus,
-	pastes *paste.Store, version string) *Server {
+	pastes *paste.Store, assets *review.AssetStore, version string) *Server {
 	s := &Server{
 		cfg: cfg, st: st, auth: a, review: rv, terminal: tm, ptys: ptys,
-		notify: nt, bus: bus, pastes: pastes, version: version,
+		notify: nt, bus: bus, pastes: pastes, assets: assets, version: version,
 		// Ten login attempts a minute is generous for a human and ruinous for
 		// an online guesser; the enrollment code gets a tighter bucket because
 		// it is the one secret that is short enough to be worth guessing.

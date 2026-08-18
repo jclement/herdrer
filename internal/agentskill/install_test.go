@@ -97,3 +97,22 @@ func TestRenderBakesInTheOrigin(t *testing.T) {
 		t.Error("a trailing slash produced a doubled separator")
 	}
 }
+
+// TestSkillTeachesTheAttachmentKinds keeps the vended instructions in step with
+// what the API actually accepts. A skill that omits a capability is a
+// capability no agent will ever use.
+func TestSkillTeachesTheAttachmentKinds(t *testing.T) {
+	doc := Render("https://box.example.com")
+	for _, must := range []string{
+		"filediff",             // whole files, server-diffed
+		"/api/v1/agent/assets", // image upload
+		`\"kind\":\"image\"`,   // how to reference one
+		"context",              // how to trim a filediff
+		"answer_note",          // the note outranks the button
+		"expired",              // a timeout is not consent
+	} {
+		if !strings.Contains(doc, strings.ReplaceAll(must, `\"`, `"`)) {
+			t.Errorf("the vended skill never mentions %q", must)
+		}
+	}
+}

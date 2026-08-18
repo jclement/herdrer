@@ -56,12 +56,16 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 	if err != nil {
 		t.Fatalf("paste store: %v", err)
 	}
+	assets, err := review.NewAssetStore(dir)
+	if err != nil {
+		t.Fatalf("asset store: %v", err)
+	}
 
 	u := &store.User{ID: "user-1", Handle: "jeff", DisplayName: "Jeff", Role: "admin", CreatedAt: time.Now()}
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, pastes, "test"), st, u
+	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, pastes, assets, "test"), st, u
 }
 
 // newTestServerNoUser returns a server on a box that has never been enrolled,
@@ -129,6 +133,7 @@ var everyRoute = []route{
 	{"POST", "/api/v1/stream/ticket", "session"},
 
 	{"POST", "/api/v1/agent/review", "token"},
+	{"POST", "/api/v1/agent/assets", "token"},
 	{"GET", "/api/v1/agent/review", "token"},
 	{"GET", "/api/v1/agent/review/abc", "token"},
 	{"DELETE", "/api/v1/agent/review/abc", "token"},

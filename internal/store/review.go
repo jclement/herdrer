@@ -52,6 +52,18 @@ type Attachment struct {
 	Title    string `json:"title,omitempty"`
 	Language string `json:"language,omitempty"`
 	Content  string `json:"content"`
+
+	// Before and After are kept for kind="filediff" so the reader can expand
+	// past the diff to the whole file. Content holds the computed unified diff.
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+
+	// AssetID names an uploaded image for kind="image".
+	AssetID string `json:"asset_id,omitempty"`
+
+	// Context is how many unchanged lines to show around each hunk of a
+	// filediff. Zero means the whole file, which is the default and the point.
+	Context int `json:"context,omitempty"`
 }
 
 // Item lifecycle statuses.
@@ -92,9 +104,11 @@ func (s *Store) CreateReviewItem(ctx context.Context, it *ReviewItem) error {
 	}
 	for i, a := range it.Attachments {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO review_attachments (id, item_id, ord, kind, title, language, content)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			a.ID, it.ID, i, a.Kind, a.Title, a.Language, a.Content); err != nil {
+			INSERT INTO review_attachments (id, item_id, ord, kind, title, language, content,
+				before_content, after_content, asset_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.ID, it.ID, i, a.Kind, a.Title, a.Language, a.Content,
+			nullIfEmpty(a.Before), nullIfEmpty(a.After), nullIfEmpty(a.AssetID)); err != nil {
 			return err
 		}
 	}
@@ -395,14 +409,17 @@ func scanItemRows(row rowScanner) (*ReviewItem, error) {
 
 func (s *Store) loadAttachments(ctx context.Context, it *ReviewItem) error {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, ord, kind, title, language, content FROM review_attachments WHERE item_id = ? ORDER BY ord`, it.ID)
+		`SELECT id, ord, kind, title, language, content,
+		        COALESCE(before_content, ''), COALESCE(after_content, ''), COALESCE(asset_id, '')
+		 FROM review_attachments WHERE item_id = ? ORDER BY ord`, it.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var a Attachment
-		if err := rows.Scan(&a.ID, &a.Ord, &a.Kind, &a.Title, &a.Language, &a.Content); err != nil {
+		if err := rows.Scan(&a.ID, &a.Ord, &a.Kind, &a.Title, &a.Language, &a.Content,
+			&a.Before, &a.After, &a.AssetID); err != nil {
 			return err
 		}
 		it.Attachments = append(it.Attachments, a)
@@ -415,4 +432,50 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// ReviewAsset is an uploaded image belonging to a review item.
+type ReviewAsset struct {
+	ID        string
+	UserID    string
+	TokenID   *string
+	ItemID    *string
+	MediaType string
+	Bytes     int64
+	Path      string
+	CreatedAt time.Time
+}
+
+// CreateReviewAsset records an uploaded image.
+func (s *Store) CreateReviewAsset(ctx context.Context, a *ReviewAsset) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO review_assets (id, user_id, token_id, item_id, media_type, bytes, path, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.UserID, a.TokenID, a.ItemID, a.MediaType, a.Bytes, a.Path, a.CreatedAt.Unix())
+	return err
+}
+
+// GetReviewAsset loads asset metadata. The caller must check ownership.
+func (s *Store) GetReviewAsset(ctx context.Context, id string) (*ReviewAsset, error) {
+	var a ReviewAsset
+	var token, item sql.NullString
+	var created int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, token_id, item_id, media_type, bytes, path, created_at
+		FROM review_assets WHERE id = ?`, id).
+		Scan(&a.ID, &a.UserID, &token, &item, &a.MediaType, &a.Bytes, &a.Path, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if token.Valid {
+		a.TokenID = &token.String
+	}
+	if item.Valid {
+		a.ItemID = &item.String
+	}
+	a.CreatedAt = time.Unix(created, 0)
+	return &a, nil
 }
