@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { TERMINAL_PATH } from "../../components/AppShell";
 import { Link2, Terminal, Trash2 } from "lucide-react";
 import { ApiError, describeError } from "../../lib/api";
 import { useDismissReview, useReview } from "../../lib/queries";
@@ -175,7 +176,9 @@ export function ItemPage() {
             }
             onClick={() => {
               setMoreOpen(false);
-              void navigate({ to: "/" });
+              // The terminal's own URL, not `/` — `/` is the inbox on a phone,
+              // which is the screen this action is being taken from.
+              void navigate({ to: TERMINAL_PATH });
             }}
           />
           <SheetAction

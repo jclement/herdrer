@@ -24,6 +24,7 @@ import {
 import type { QueueItem } from "../../lib/reviewQueue";
 import { shortAge } from "../../lib/format";
 import { useIsDesktop } from "../../lib/layout";
+import { isTerminalPath } from "../../components/AppShell";
 import { useVisualViewport } from "../../lib/viewport";
 import { parked } from "../../lib/storage";
 import { Chip, EmptyState, cx } from "../../components/ui";
@@ -42,14 +43,16 @@ import { ReviewSheet } from "./ReviewSheet";
  *   peek   a strip under the header that never takes focus
  *   stack  the list, when you go looking for something you deferred
  *
- * It sits above the router outlet so an item can rise over the terminal, the
- * agents board or settings alike, and stays out of the way on the two routes
- * that are already review surfaces.
+ * It sits above the router outlet on every route, because `items`, `open` and
+ * `openItem` are the whole app's view of the queue — the desktop rail is fed
+ * from here too. But the *overlays* are scoped to one surface: the phone's
+ * terminal. Everywhere else an arriving item is a row appearing in a list you
+ * are already looking at, which is what the inbox-as-home means. See
+ * lib/reviewQueue.ts for the argument.
  *
- * All of that is the phone. On a desktop none of it fires: the queue is a rail
- * beside the terminal (features/review/ReviewRail.tsx), fed from `items` here,
- * and the only overlay is the sheet — reused verbatim as the modal a rail row
- * opens. One queue, one document component, two presentations.
+ * The one overlay that fires anywhere is the sheet a human explicitly opened —
+ * reused verbatim as the modal a desktop rail row opens. One queue, one
+ * document component, two presentations.
  */
 
 export interface ReviewQueueApi {
@@ -99,27 +102,27 @@ export function useReviewQueue(): ReviewQueueApi {
   return useContext(Ctx);
 }
 
-/** Only `desktop` and the two timing fields matter to nextWakeAt; the rest is filler. */
+/** Only `terminal` and the two timing fields matter to nextWakeAt; the rest is filler. */
 const EMPTY_CTX: QueueCtx = {
-  desktop: false,
+  terminal: false,
   interactive: false,
   inputHot: false,
-  suppressed: false,
   pinned: null,
   deferred: [],
   cooldownUntil: 0,
   quietSince: null,
 };
 
-/** Routes that already show reviews: an overlay there would be a duplicate. */
-function isSuppressed(pathname: string): boolean {
-  return pathname.startsWith("/r/") || pathname === "/inbox";
-}
-
 export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const desktop = useIsDesktop();
   const reviews = useReviews("all");
+
+  /**
+   * The one gate. Overlays exist on the phone's terminal and nowhere else:
+   * a desktop has the rail, and a phone anywhere else has the list.
+   */
+  const terminal = !desktop && isTerminalPath(path, desktop);
 
   // Seeded from localStorage: a defer that a reload forgets is a defer that lied.
   const [deferred, setDeferred] = useState<string[]>(() => parked.read());
@@ -141,10 +144,9 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   );
 
   const ctx: QueueCtx = {
-    desktop,
+    terminal,
     interactive,
     inputHot: hot,
-    suppressed: isSuppressed(path),
     pinned,
     deferred,
     cooldownUntil,
@@ -164,18 +166,19 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
    * the human still typing, and then never arm again.
    */
   useEffect(() => {
-    // Desktop: nothing raises itself, so there is no transition to wait for.
-    // Clearing `hot` on the way in matters — a window dragged wide while the
-    // human was typing would otherwise leave it stuck true, and stuck-true is
-    // exactly "no question may take the screen" once the window narrows again.
-    if (desktop) {
+    // Off the terminal nothing raises itself, so there is no transition to wait
+    // for. Clearing `hot` on the way out matters — a window dragged wide, or a
+    // tap on the Inbox tab, while the human was typing would otherwise leave it
+    // stuck true, and stuck-true is exactly "no question may take the screen"
+    // once they come back.
+    if (!terminal) {
       setHot(false);
       return;
     }
     let timer = 0;
     const wakeIn = (now: number) => {
       const wake = nextWakeAt(
-        { ...EMPTY_CTX, desktop, cooldownUntil },
+        { ...EMPTY_CTX, terminal, cooldownUntil },
         hot ? lastInputRef.current : 0,
         now,
       );
@@ -194,16 +197,47 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
     if (delay === null) return;
     timer = window.setTimeout(step, delay);
     return () => window.clearTimeout(timer);
-  }, [hot, cooldownUntil, desktop]);
+  }, [hot, cooldownUntil, terminal]);
 
   const noteInput = useCallback(() => {
     lastInputRef.current = Date.now();
-    // Nothing on a desktop consults the hot window, and this is called once per
-    // character — so do not put React to work deciding it has nothing to do.
-    if (desktop) return;
+    // Only the phone's terminal consults the hot window, and this is called once
+    // per character — so do not put React to work deciding it has nothing to do.
+    if (!terminal) return;
     // setState with the same value is a no-op, so this is safe per keystroke.
     setHot(true);
-  }, [desktop]);
+  }, [terminal]);
+
+  /*
+   * Arriving at the terminal is not the same as being at it when something
+   * arrives.
+   *
+   * Rule 8 already knows how to say "the things that were waiting a moment ago
+   * do not get to raise themselves again" — it is the anti-stampede rule, and
+   * `quietSince` is how it is spelled. Entering the terminal wants exactly that
+   * sentence. With the inbox as home you saw the queue, you read the titles,
+   * and you tapped Terminal anyway; covering the terminal with the item you
+   * just walked past is the app arguing with the human. Anything that arrives
+   * *after* you get there is a new event and still interrupts, which is the
+   * only part of this that was ever load-bearing.
+   */
+  useEffect(() => {
+    if (terminal) setQuietSince(Date.now());
+  }, [terminal]);
+
+  /*
+   * A pin is "open this, here". Going somewhere else closes it.
+   *
+   * Rule 1 honours an explicit open on every surface, which is what makes the
+   * desktop rail work — but that means a pin left behind by a rail click would
+   * follow the human onto /agents and float a sheet over it. It never used to,
+   * because the review routes suppressed every overlay; that suppression is
+   * gone, so the pin has to be cleared where it is actually stale.
+   */
+  useEffect(() => {
+    setPinned(null);
+    setStackOpen(false);
+  }, [path]);
 
   const setInteractive = useCallback((next: boolean) => setInteractiveState(next), []);
 

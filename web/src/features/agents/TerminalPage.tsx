@@ -28,7 +28,7 @@ import { humanBytes, imageFromTransfer, sendImage, uploadPaste } from "../../lib
 import { useBootstrap } from "../../lib/queries";
 import { Button, cx } from "../../components/ui";
 import { ScrollX } from "../../components/ScrollX";
-import { BottomNav, HeaderNav, ThemeToggle } from "../../components/AppShell";
+import { BottomNav, Header } from "../../components/AppShell";
 import { useToast } from "../../components/toast";
 import { useReviewQueue } from "../review/ReviewQueue";
 import { ReviewRail } from "../review/ReviewRail";
@@ -95,7 +95,10 @@ interface ImagePasteState {
  *   document the phone's sheet shows — as a modal, over the same component.
  */
 export function TerminalPage() {
-  const search = useSearch({ from: "/" }) as { session?: string; pane?: string };
+  // Two routes render this page — `/terminal` at any width, and `/` when the
+  // window is wide enough that home is the terminal — so the search params
+  // cannot be read against one of them.
+  const search = useSearch({ strict: false }) as { session?: string; pane?: string };
   const session = search.session ?? "";
   const toast = useToast();
   const vv = useVisualViewport();
@@ -614,62 +617,55 @@ export function TerminalPage() {
 
   return (
     <div className="fixed inset-0 flex flex-col bg-surface" style={{ height: vv.height }}>
-      <header
+      <Header
         ref={headerRef}
-        className="shrink-0 border-b border-chrome-border bg-chrome text-chrome-fg"
-        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
-      >
-        <div className="flex h-10 items-center gap-2 px-2">
-          <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
-          {/* The desktop's navigation. Below `lg` it renders nothing and the
-            bottom nav is the navigation instead. */}
-          <HeaderNav />
-          {/* The default session is the common case and needs no label; a named
-            one does, because it is a different herdr server entirely. */}
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
-            {session}
-          </span>
-          <span
-            className={cx(
-              "shrink-0 rounded border px-1.5 py-0.5 text-[10px]",
-              phase === "open"
-                ? "border-ok/50 text-ok"
-                : phase === "connecting"
-                  ? "border-chrome-border text-chrome-muted"
-                  : "border-danger/50 text-danger",
+        /* The default session is the common case and needs no label; a named
+           one does, because it is a different herdr server entirely. */
+        title={<span className="font-mono text-[11px] text-chrome-muted">{session}</span>}
+        right={
+          <>
+            <span
+              className={cx(
+                "shrink-0 rounded border px-1.5 py-0.5 text-[10px]",
+                phase === "open"
+                  ? "border-ok/50 text-ok"
+                  : phase === "connecting"
+                    ? "border-chrome-border text-chrome-muted"
+                    : "border-danger/50 text-danger",
+              )}
+            >
+              {phase}
+            </span>
+            {/* The bell is the phone's way to reach the queue. On a desktop the
+              rail is already showing it, and a second count is just a second
+              thing to keep in sync. */}
+            {queue.open > 0 && !desktop && (
+              <button
+                onClick={queue.openStack}
+                aria-label={`${queue.open} waiting on you`}
+                className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-fg hover:bg-chrome-hover"
+              >
+                <Bell className="w-4 h-4" />
+                <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-danger-fg">
+                  {queue.open > 99 ? "99+" : queue.open}
+                </span>
+              </button>
             )}
-          >
-            {phase}
-          </span>
-          {/* The bell is the phone's way to reach the queue. On a desktop the
-            rail is already showing it, and a second count is just a second
-            thing to keep in sync. */}
-          {queue.open > 0 && !desktop && (
-            <button
-              onClick={queue.openStack}
-              aria-label={`${queue.open} waiting on you`}
-              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-fg hover:bg-chrome-hover"
-            >
-              <Bell className="w-4 h-4" />
-              <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-danger-fg">
-                {queue.open > 99 ? "99+" : queue.open}
-              </span>
-            </button>
-          )}
-          <FontControl size={fontSize} onChange={setFontSize} />
-          {desktop && (
-            <button
-              aria-label="Send an image"
-              title="Send an image to herdr's focused pane"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted hover:bg-chrome-hover hover:text-chrome-fg"
-            >
-              <ImageIcon className="w-4 h-4" />
-            </button>
-          )}
-          {desktop && <ThemeToggle />}
-        </div>
-      </header>
+            <FontControl size={fontSize} onChange={setFontSize} />
+            {/* The phone reaches the picker from the modifier bar instead. */}
+            {desktop && (
+              <button
+                aria-label="Send an image"
+                title="Send an image to herdr's focused pane"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted hover:bg-chrome-hover hover:text-chrome-fg"
+              >
+                <ImageIcon className="w-4 h-4" />
+              </button>
+            )}
+          </>
+        }
+      />
 
       {/*
         The desktop split: the terminal column takes the width that is left, and

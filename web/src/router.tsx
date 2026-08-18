@@ -10,8 +10,17 @@ import {
 import { ApiError } from "./lib/api";
 import { useBootstrap } from "./lib/queries";
 import { useStream } from "./lib/stream";
+import { useIsDesktop } from "./lib/layout";
 import { setBadge } from "./lib/pwa";
-import { BottomNav, Footer, Header, Page } from "./components/AppShell";
+import {
+  BottomNav,
+  Footer,
+  Header,
+  Page,
+  TERMINAL_PATH,
+  headerFor,
+  isTerminalPath,
+} from "./components/AppShell";
 import { Spinner } from "./components/ui";
 import { Login } from "./features/auth/Login";
 import { InboxPage } from "./features/review/InboxPage";
@@ -28,7 +37,8 @@ import { NotFound, RouteError } from "./features/misc/Pages";
  * on a phone, over LTE, before the question can render. None of these three is
  * on that path. The review surfaces stay eagerly imported for the same reason:
  * a second round trip in front of the thing someone was paged about is worse
- * than the bytes.
+ * than the bytes. That holds all the more now that the inbox is what `/` shows
+ * on a phone — the entry chunk *is* the first screen.
  */
 const TerminalPage = lazy(() =>
   import("./features/agents/TerminalPage").then((m) => ({ default: m.TerminalPage })),
@@ -46,35 +56,61 @@ function Lazy({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The information architecture, inverted.
+ * The information architecture.
  *
- *   /          herdr itself, live, in xterm. The front page.
+ *   /          home — and home is not the same screen at both widths.
+ *   /terminal  herdr itself, live, in xterm, at any width.
  *   /agents    the herdr session tree — workspace, tab, pane, agent.
- *   /inbox     the review list, for finding something you deferred.
- *   /r/$id     one review as a page: what a push notification or a link resolves to.
+ *   /inbox     the review list in full: open, parked, answered, expired.
+ *   /r/$id     one review as a page: what a push notification resolves to.
  *   /settings  passkeys, sessions, tokens, push, audit.
  *
- * Review used to be the root and the terminal was buried three segments deep.
- * It is the other way around now, and the list is a place you go looking rather
- * than a place you land: an item that needs you arrives as an overlay on top of
- * whatever you are doing (features/review/ReviewQueue.tsx).
+ * On a desktop `/` is the terminal with the review rail down its right, which
+ * is the strongest arrangement in the product: you watch three agents' questions
+ * pile up *while* you type at a fourth. On a phone one screen holds one thing,
+ * and the thing worth holding is the queue — you open herdrer because something
+ * is waiting, not to type. So `/` is the inbox there, and the terminal is a tab.
  */
 
-function titleFor(path: string): string | undefined {
-  if (path.startsWith("/r/")) return "Review";
-  if (path === "/agents") return "Agents";
-  if (path === "/inbox") return "Inbox";
-  if (path === "/settings") return "Settings";
-  return undefined;
+/**
+ * Home, resolved by breakpoint rather than by redirect.
+ *
+ * A redirect would rewrite the URL out from under the human on a rotation or a
+ * window drag — `/` becomes `/inbox`, and now the back button goes to `/`,
+ * which redirects to `/inbox` again, and back is broken. It would also make a
+ * bookmark or a shared link mean different things depending on the width of the
+ * window that opened it. Rendering keeps one URL for "home" and lets the layout
+ * decide what home is, which is the same trick the rest of the app already
+ * plays with `useIsDesktop`.
+ */
+function HomeRoute() {
+  const desktop = useIsDesktop();
+  if (!desktop) return <InboxPage />;
+  return (
+    <Lazy>
+      <TerminalPage />
+    </Lazy>
+  );
 }
 
-function backFor(path: string): { to: string; label: string } | undefined {
-  if (path.startsWith("/r/")) return { to: "/inbox", label: "Back to the inbox" };
-  return undefined;
+/**
+ * `session` is a herdr session name; absent means the default session, which is
+ * the one /agents renders. `pane` is only a note to the human about where they
+ * came from — herdrer has no endpoint that focuses a pane, so it cannot be more
+ * than that. Both routes that can render the terminal accept them.
+ */
+function terminalSearch(search: Record<string, unknown>): { session?: string; pane?: string } {
+  return {
+    ...(typeof search.session === "string" && search.session !== ""
+      ? { session: search.session }
+      : {}),
+    ...(typeof search.pane === "string" && search.pane !== "" ? { pane: search.pane } : {}),
+  };
 }
 
 function RootLayout() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const desktop = useIsDesktop();
   const boot = useBootstrap();
   const authFailed = boot.error instanceof ApiError && boot.error.isAuth;
   const signedIn = !!boot.data && !authFailed;
@@ -98,10 +134,11 @@ function RootLayout() {
   }
   if (!signedIn) return <Login />;
 
-  // The terminal owns the whole screen: no header, no footer, no page scroll.
-  // It carries its own chrome, including the navigation, because the bottom of
-  // that screen belongs to the modifier bar the moment you take control.
-  if (path === "/") {
+  // The terminal owns the whole screen: no page scroll, no footer, and on a
+  // phone no bottom bar either once you take control, because the bottom of
+  // that screen belongs to the modifier bar. It still uses the shared header —
+  // it just supplies the header's right-hand slot itself.
+  if (isTerminalPath(path, desktop)) {
     return (
       <ReviewQueueProvider>
         <Outlet />
@@ -109,19 +146,22 @@ function RootLayout() {
     );
   }
 
-  // A review item is a leaf: its sticky action bar owns the bottom of the screen,
-  // so the nav would sit under it.
+  // A review item is a leaf: its sticky action bar owns the bottom of the
+  // screen, so the nav would sit under it.
   const leaf = path.startsWith("/r/");
+  const { title, back } = headerFor(path, desktop);
 
   return (
     <ReviewQueueProvider>
       <div className="flex min-h-full flex-col">
-        <Header title={titleFor(path)} back={backFor(path)} />
+        <Header title={title} back={back} />
         <Page className="flex-1">
           <Outlet />
         </Page>
         <Footer version={boot.data?.version} host={window.location.host} />
-        {!leaf && (
+        {/* Rendered, not hidden by a class: on a desktop the header carries the
+            only navigation there is. */}
+        {!leaf && !desktop && (
           <BottomNav
             reviewBadge={counts?.review_open ?? 0}
             agentBadge={counts?.agents_blocked ?? 0}
@@ -139,26 +179,22 @@ const rootRoute = createRootRoute({
   errorComponent: ({ error }) => <RouteError error={error} />,
 });
 
-const terminalRoute = createRoute({
+const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  component: HomeRoute,
+  validateSearch: terminalSearch,
+});
+
+const terminalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: TERMINAL_PATH,
   component: () => (
     <Lazy>
       <TerminalPage />
     </Lazy>
   ),
-  /**
-   * `session` is a herdr session name; absent means the default session, which
-   * is the one /agents renders. `pane` is only a note to the human about where
-   * they came from — herdrer has no endpoint that focuses a pane, so it cannot
-   * be more than that.
-   */
-  validateSearch: (search: Record<string, unknown>): { session?: string; pane?: string } => ({
-    ...(typeof search.session === "string" && search.session !== ""
-      ? { session: search.session }
-      : {}),
-    ...(typeof search.pane === "string" && search.pane !== "" ? { pane: search.pane } : {}),
-  }),
+  validateSearch: terminalSearch,
 });
 
 const inboxRoute = createRoute({
@@ -189,14 +225,14 @@ const agentsRoute = createRoute({
 /**
  * The terminal used to live here, one per agent, with the agent's name passed
  * as the herdr *session* name — which would have made herdr open a new empty
- * session named after the agent rather than showing it. The terminal is the
- * root now and attaches to the shared session; old links land there.
+ * session named after the agent rather than showing it. Old links land on the
+ * terminal's current home instead.
  */
 const legacyTerminalRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/agents/$name/term",
   beforeLoad: () => {
-    throw redirect({ to: "/" });
+    throw redirect({ to: TERMINAL_PATH });
   },
   component: () => (
     <Lazy>
@@ -216,6 +252,7 @@ const settingsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
+  homeRoute,
   terminalRoute,
   inboxRoute,
   itemRoute,

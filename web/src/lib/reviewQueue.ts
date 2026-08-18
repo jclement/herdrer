@@ -3,14 +3,29 @@ import type { ReviewItem, Urgency } from "./types";
 /**
  * When a review may take the screen, and when it may only clear its throat.
  *
- * The terminal is the page now, and the terminal is a live PTY with a human's
- * fingers in it. That makes an arriving question a genuine hazard rather than a
- * layout problem: a sheet that mounts and takes focus mid-word eats the rest of
- * the word, and — much worse — the characters that were already in flight land
- * somewhere nobody chose. A `y` meant for a shell prompt is not a `y` you want
- * arriving at a confirm dialog, in either direction.
+ * All of this is a policy for exactly one surface: **the phone's terminal
+ * route**. That is the only place in the product where an arriving question is
+ * a genuine hazard rather than a layout problem — a live PTY with a human's
+ * fingers in it, on a screen that holds one thing at a time. A sheet that
+ * mounts and takes focus mid-word eats the rest of the word, and — much worse —
+ * the characters already in flight land somewhere nobody chose. A `y` meant for
+ * a shell prompt is not a `y` you want arriving at a confirm dialog, in either
+ * direction.
  *
- * So there are two presentations, not one:
+ * Nowhere else needs any of it, and `ctx.terminal` is the single gate that says
+ * so:
+ *
+ *   the phone's inbox   `/` on a phone is the list. An arriving item is a new
+ *                       row, which is the whole point of the screen. Raising a
+ *                       sheet over it would be covering the answer with the
+ *                       answer.
+ *   the desktop         the queue is a rail beside the terminal, permanently
+ *                       visible while you work. There is nothing an
+ *                       interruption could tell you that the rail is not
+ *                       already telling you.
+ *   everywhere else     agents, settings, an item page: you navigated there.
+ *
+ * On the phone's terminal, then, there are two presentations rather than one:
  *
  *   peek   a slim strip in the chrome above the key bar. It never takes focus,
  *          never covers the terminal's text, and never moves anything the thumb
@@ -20,8 +35,10 @@ import type { ReviewItem, Urgency } from "./types";
  *
  * The rules, in the order they are argued:
  *
- *   1. An explicit open always wins. If the human tapped the badge, the peek,
- *      or a row in the stack, they asked for it — mid-keystroke or not.
+ *   1. An explicit open always wins, on every surface. If the human tapped the
+ *      badge, the peek, a row in the stack or a row in the desktop rail, they
+ *      asked for it — mid-keystroke or not. This is the one rule that survives
+ *      outside the terminal, because a click is not an interruption.
  *   2. Nothing auto-raises while input is *hot* (a key went to the PTY inside
  *      INPUT_HOT_MS). Not even `blocking`. Blocking earns the right to
  *      interrupt, and it does — it just interrupts as a peek until the typing
@@ -42,12 +59,6 @@ import type { ReviewItem, Urgency } from "./types";
  *      items arriving mid-command produce one sheet and one strip, never three
  *      sheets in a row. Something that arrives *after* that moment is a new
  *      event and may still interrupt, which is the whole point of `blocking`.
- *
- * All of that is a policy for a phone, where the screen holds one thing. On a
- * desktop the queue is a rail beside the terminal, permanently visible, and
- * rule 0 swallows the rest: nothing interrupts, because there is nothing an
- * interruption could tell you that the rail is not already telling you. See
- * `QueueCtx.desktop`.
  *
  * A synthesized `herdr` row (a TUI pane sitting at its own prompt) never raises
  * anything: it carries no document, so a sheet for it would be an empty sheet.
@@ -78,28 +89,22 @@ export interface QueueItem {
 
 export interface QueueCtx {
   /**
-   * The desktop layout is on screen, which means the review rail is too.
+   * The phone's terminal route is the screen — the only place anything here may
+   * raise itself.
    *
-   * Everything above is a policy for a surface that can only show one thing at
-   * a time. A desktop shows the queue *beside* the terminal permanently, so
-   * there is nothing left for an interruption to accomplish: the human can
-   * already see what is waiting while they work. Nothing auto-raises and
-   * nothing peeks; a click on the rail opens the document as a modal, and that
-   * is an explicit open, which has always outranked every rule here.
-   *
-   * This also retires the hot-input suppression on desktop rather than leaving
-   * it to quietly do nothing — there is no stampede to prevent when nothing
-   * raises itself, and a rule that cannot fire is a rule that misleads whoever
-   * reads it next.
+   * This is one flag rather than the several it replaces (a desktop test, a
+   * "this route is already a review surface" test) because they were all the
+   * same question asked from different directions, and a rule that can never
+   * fire is a rule that misleads whoever reads it next. Off the phone's
+   * terminal the queue is still counted, still ordered, still listed — it just
+   * never takes the screen on its own initiative.
    */
-  desktop: boolean;
+  terminal: boolean;
   /** The human has taken control of the terminal. */
   interactive: boolean;
   /** A key reached the PTY within INPUT_HOT_MS. */
   inputHot: boolean;
-  /** The route already is a review surface — the inbox, or an item page. */
-  suppressed: boolean;
-  /** Explicitly opened by the human; outranks every other rule. */
+  /** Explicitly opened by the human; outranks every other rule, everywhere. */
   pinned: string | null;
   /** Dismissed without answering, this session. */
   deferred: readonly string[];
@@ -167,8 +172,7 @@ export function sortQueue(items: readonly QueueItem[]): QueueItem[] {
 
 /** Rule 2/3/4: may this item take the whole screen on its own initiative? */
 export function canAutoRaise(item: QueueItem, ctx: QueueCtx): boolean {
-  if (ctx.desktop) return false;
-  if (ctx.suppressed) return false;
+  if (!ctx.terminal) return false;
   if (item.provisional) return false;
   if (ctx.deferred.includes(item.id)) return false;
   if (ctx.inputHot) return false;
@@ -185,8 +189,7 @@ export function canAutoRaise(item: QueueItem, ctx: QueueCtx): boolean {
 
 /** May this item announce itself in the strip? Cheaper than a sheet, so: mostly. */
 export function canPeek(item: QueueItem, ctx: QueueCtx): boolean {
-  if (ctx.desktop) return false;
-  if (ctx.suppressed) return false;
+  if (!ctx.terminal) return false;
   if (ctx.deferred.includes(item.id)) return false;
   if (item.urgency === "low") return !ctx.interactive;
   return true;
@@ -196,20 +199,18 @@ export function planQueue(items: readonly QueueItem[], ctx: QueueCtx, now: numbe
   const ordered = sortQueue(items);
   const open = ordered.length;
 
-  // 0 — on a route that *is* a review surface there is no overlay at all, not
-  // even one the human opened: they navigated to the page, and a sheet floating
-  // over the same document is two of the same thing with two Escape targets.
-  if (ctx.suppressed) return { sheet: null, peek: null, waiting: open, open };
-
-  // 1 — an explicit open outranks everything, including a hot keyboard.
+  // 1 — an explicit open outranks everything, including a hot keyboard, and it
+  // is honoured on every surface: a rail click on a desktop and a tap on the
+  // peek strip are the same gesture, and neither is an interruption.
   if (ctx.pinned !== null && ordered.some((i) => i.id === ctx.pinned)) {
     return { sheet: ctx.pinned, peek: null, waiting: open - 1, open };
   }
 
-  // 1.5 — on a desktop the rail is permanently on screen, so an unasked-for
-  // overlay is a second copy of something already visible. Explicit opens were
-  // handled above; everything else is a row in the rail and nothing more.
-  if (ctx.desktop) return { sheet: null, peek: null, waiting: open, open };
+  // 0 — nothing raises itself anywhere but the phone's terminal. On the inbox
+  // an arrival is a new row; on a desktop it is a new row in the rail. Both are
+  // already the answer, and a sheet over either is two of the same thing with
+  // two Escape targets.
+  if (!ctx.terminal) return { sheet: null, peek: null, waiting: open, open };
 
   const eligible = ordered.filter((i) => !ctx.deferred.includes(i.id));
   if (eligible.length === 0) return { sheet: null, peek: null, waiting: open, open };
@@ -238,9 +239,10 @@ export function planQueue(items: readonly QueueItem[], ctx: QueueCtx, now: numbe
  * is a transition with no event behind it: nothing arrives, time simply passes.
  */
 export function nextWakeAt(ctx: QueueCtx, lastInputAt: number, now: number): number | null {
-  // On a desktop nothing raises itself, so no amount of time passing changes
-  // the plan — and the caller's re-render-per-keystroke loop never arms.
-  if (ctx.desktop) return null;
+  // Off the phone's terminal nothing raises itself, so no amount of time
+  // passing changes the plan — and the caller's re-render-per-keystroke loop
+  // never arms.
+  if (!ctx.terminal) return null;
   const candidates: number[] = [];
   const hotUntil = lastInputAt + INPUT_HOT_MS;
   if (hotUntil > now) candidates.push(hotUntil);

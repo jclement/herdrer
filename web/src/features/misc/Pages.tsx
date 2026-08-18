@@ -14,8 +14,10 @@ export function NotFound() {
         Nothing at this address. Either the item was reaped, or a URL got typed from memory.
       </p>
       <p className="text-xs text-muted">{taglineForDate()}</p>
+      {/* Home, whatever home is at this width — the inbox on a phone, the
+          terminal on a desktop. */}
       <Link to="/">
-        <Button variant="primary">Back to herdr</Button>
+        <Button variant="primary">Back to herdrer</Button>
       </Link>
     </div>
   );

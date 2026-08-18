@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { WifiOff } from "lucide-react";
 import { describeError } from "../../lib/api";
 import { useBootstrap, useHerdrState } from "../../lib/queries";
+import { TERMINAL_PATH } from "../../components/AppShell";
 import { ErrorState, SkeletonRows } from "../../components/ui";
 import { HerdrTree } from "./HerdrTree";
 
@@ -48,7 +49,7 @@ export function AgentsPage() {
       <HerdrTree
         state={data}
         terminalEnabled={terminalEnabled}
-        onOpenTerminal={(pane) => void navigate({ to: "/", search: { pane: pane?.id } })}
+        onOpenTerminal={(pane) => void navigate({ to: TERMINAL_PATH, search: { pane: pane?.id } })}
       />
     </div>
   );
