@@ -100,12 +100,40 @@ POST /api/v1/tasks  {body, scope?}    -> task
 ## Terminal and realtime (human only)
 
 ```
-GET  /api/v1/agents                   -> [{name, workspace, kind, status, elapsed, pane_id}]
+GET  /api/v1/agents                   -> [{name, workspace, kind, status, pane_id, title, cwd, focused}]
+GET  /api/v1/herdr/state              -> the whole session tree, below
 POST /api/v1/terminal/ticket {session?} -> {ticket, expires_at}
 POST /api/v1/stream/ticket            -> {ticket, expires_at}
 GET  /ws/terminal?ticket=…&cols=&rows=&session=
 GET  /ws/stream?ticket=…
 ```
+
+`herdr/state` is what the agents UI is built on:
+
+```jsonc
+{
+  "running": true, "version": "0.8.0", "protocol": 19, "blocked": 0,
+  "workspaces": [{
+    "id": "w1", "label": "", "number": 1, "focused": true,
+    "agent_status": "unknown", "tab_count": 1, "pane_count": 1,
+    "tabs": [{
+      "id": "w1:t1", "workspace_id": "w1", "label": "", "number": 1,
+      "focused": true, "agent_status": "unknown",
+      "panes": [{
+        "id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
+        "title": "…", "cwd": "/home/dev", "focused": true,
+        "agent_status": "unknown",
+        "agent": {"name": "…", "kind": "claude", "status": "blocked", …}
+      }]
+    }]
+  }],
+  "agents": [ … the flat list, for a board … ]
+}
+```
+
+`running: false` with an empty tree is an ordinary state, not an error: a box
+that has just booted may not have a Herdr server yet. herdrer starts one at
+boot, so this should be brief — but a UI must render it, not crash on it.
 
 Tickets are single use and live 60 seconds. The upgrade also checks `Origin`
 exactly. A bearer token is refused on both sockets unconditionally.

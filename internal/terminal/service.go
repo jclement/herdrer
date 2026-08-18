@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // Agent is one row on the status board.
@@ -41,9 +44,10 @@ type Service struct {
 	configDir string
 	herdrBin  string
 
-	mu    sync.Mutex
-	cache []Agent
-	at    time.Time
+	mu     sync.Mutex
+	cache  []Agent
+	at     time.Time
+	keeper *os.File
 }
 
 // New builds the service. A missing herdr binary is not an error: the box may
@@ -158,11 +162,7 @@ func (s *Service) CountBlocked(ctx context.Context) int {
 // installing herdr is one of the things you would want to do from there.
 func (s *Service) command(ctx context.Context, session string) *exec.Cmd {
 	if s.herdrBin != "" {
-		args := []string{"attach"}
-		if session != "" {
-			args = append(args, "--session", session)
-		}
-		cmd := exec.CommandContext(ctx, s.herdrBin, args...)
+		cmd := exec.CommandContext(ctx, s.herdrBin, herdrArgs(session)...)
 		cmd.Env = s.env()
 		cmd.Dir = homeDir()
 		return cmd
@@ -175,6 +175,20 @@ func (s *Service) command(ctx context.Context, session string) *exec.Cmd {
 	cmd.Env = s.env()
 	cmd.Dir = homeDir()
 	return cmd
+}
+
+// herdrArgs builds the argv that launches or attaches a Herdr session.
+//
+// Plain `herdr` launches the default session or attaches to it if one is
+// already running; `--session <name>` does the same for a named one. There is
+// deliberately no "attach" subcommand in the argv: `herdr attach` is not a
+// valid command — it exits immediately with "unknown command: attach", which
+// in a browser terminal looks like the terminal itself is broken.
+func herdrArgs(session string) []string {
+	if session == "" {
+		return nil
+	}
+	return []string{"--session", session}
 }
 
 func (s *Service) env() []string {
@@ -230,4 +244,277 @@ func (s *Service) Sessions() []string {
 		}
 	}
 	return out
+}
+
+// EnsureServer makes sure a Herdr server is running, starting one if it is not.
+//
+// Herdr's server is started by its first client, not by a daemon flag. On a
+// laptop that is invisible — you run `herdr` and there it is. On a headless box
+// nobody runs anything, so until a human opens the browser terminal there is no
+// server, the socket does not exist, and the agent board is empty with no
+// explanation for why.
+//
+// So herdrer starts one at boot. The keeper is a real PTY running a real
+// client, because Herdr is a TUI and will not start without one; it is simply
+// never attached to a browser. Agents launched inside it outlive every browser
+// session and every herdrer restart, which is the entire point of a remote box.
+func (s *Service) EnsureServer(ctx context.Context) error {
+	if s.herdrBin == "" {
+		return nil
+	}
+	if s.ServerRunning(ctx) {
+		slog.Info("herdr server already running")
+		return nil
+	}
+
+	slog.Info("no herdr server running, starting one")
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), s.herdrBin)
+	cmd.Env = s.env()
+	cmd.Dir = homeDir()
+
+	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 120, Rows: 40})
+	if err != nil {
+		return fmt.Errorf("start herdr: %w", err)
+	}
+
+	// The keeper's output goes nowhere, but it must be drained: a PTY whose
+	// buffer fills blocks the writer, which would wedge the very server this
+	// is here to keep alive.
+	go func() {
+		buf := make([]byte, 8192)
+		for {
+			if _, err := f.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	s.mu.Lock()
+	s.keeper = f
+	s.mu.Unlock()
+
+	// Wait for the socket rather than assuming: a caller that reports "started"
+	// while the board is still empty is worse than one that reports a failure.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.ServerRunning(ctx) {
+			slog.Info("herdr server started")
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("herdr did not come up within 20s")
+}
+
+// ServerRunning reports whether Herdr's control socket is answering.
+func (s *Service) ServerRunning(ctx context.Context) bool {
+	if s.herdrBin == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.herdrBin, "status", "server")
+	cmd.Env = s.env()
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "running") && !strings.Contains(string(out), "not running")
+}
+
+// StopKeeper closes the keeper PTY. The Herdr server itself is deliberately
+// left running: it owns the user's agents, and herdrer restarting for a deploy
+// must not kill them.
+func (s *Service) StopKeeper() {
+	s.mu.Lock()
+	f := s.keeper
+	s.keeper = nil
+	s.mu.Unlock()
+	if f != nil {
+		_ = f.Close()
+	}
+}
+
+// --- the full session tree -------------------------------------------------------
+
+// Workspace, Tab and Pane mirror Herdr's session structure. They exist so the
+// browser can render a real view of the box — which workspace, which tab, which
+// pane, and what each one is doing — rather than a flat list of agent names
+// that loses where anything lives.
+type Workspace struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Number      int    `json:"number"`
+	Focused     bool   `json:"focused"`
+	AgentStatus string `json:"agent_status"`
+	TabCount    int    `json:"tab_count"`
+	PaneCount   int    `json:"pane_count"`
+	Tabs        []Tab  `json:"tabs"`
+}
+
+// Tab is one tab within a workspace.
+type Tab struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+	Number      int    `json:"number"`
+	Focused     bool   `json:"focused"`
+	AgentStatus string `json:"agent_status"`
+	Panes       []Pane `json:"panes"`
+}
+
+// Pane is one terminal. Agent is non-nil when something agent-shaped runs here.
+type Pane struct {
+	ID          string `json:"id"`
+	TabID       string `json:"tab_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Title       string `json:"title"`
+	CWD         string `json:"cwd"`
+	Focused     bool   `json:"focused"`
+	AgentStatus string `json:"agent_status"`
+	Agent       *Agent `json:"agent,omitempty"`
+}
+
+// State is the whole session tree, plus what herdrer knows about its own
+// relationship to Herdr.
+type State struct {
+	Running    bool        `json:"running"`
+	Version    string      `json:"version"`
+	Protocol   int         `json:"protocol"`
+	Workspaces []Workspace `json:"workspaces"`
+	Agents     []Agent     `json:"agents"`
+	Blocked    int         `json:"blocked"`
+}
+
+type rawSnapshot struct {
+	Result struct {
+		Snapshot struct {
+			Version  string `json:"version"`
+			Protocol int    `json:"protocol"`
+			Agents   []struct {
+				Agent       string `json:"agent"`
+				AgentStatus string `json:"agent_status"`
+				Name        string `json:"name"`
+				PaneID      string `json:"pane_id"`
+				WorkspaceID string `json:"workspace_id"`
+				Title       string `json:"terminal_title_stripped"`
+				CWD         string `json:"cwd"`
+				Focused     bool   `json:"focused"`
+			} `json:"agents"`
+			Workspaces []struct {
+				ID          string `json:"workspace_id"`
+				Label       string `json:"label"`
+				Number      int    `json:"number"`
+				Focused     bool   `json:"focused"`
+				AgentStatus string `json:"agent_status"`
+				TabCount    int    `json:"tab_count"`
+				PaneCount   int    `json:"pane_count"`
+			} `json:"workspaces"`
+			Tabs []struct {
+				ID          string `json:"tab_id"`
+				WorkspaceID string `json:"workspace_id"`
+				Label       string `json:"label"`
+				Number      int    `json:"number"`
+				Focused     bool   `json:"focused"`
+				AgentStatus string `json:"agent_status"`
+			} `json:"tabs"`
+			Panes []struct {
+				ID          string `json:"pane_id"`
+				TabID       string `json:"tab_id"`
+				WorkspaceID string `json:"workspace_id"`
+				Title       string `json:"terminal_title_stripped"`
+				CWD         string `json:"cwd"`
+				Focused     bool   `json:"focused"`
+				AgentStatus string `json:"agent_status"`
+			} `json:"panes"`
+		} `json:"snapshot"`
+	} `json:"result"`
+}
+
+// Snapshot returns the full session tree.
+//
+// A missing or stopped Herdr is reported as `running: false` with an empty
+// tree, never as an error: "no server yet" is an ordinary state on a box that
+// just booted, and a 500 there makes the UI look broken when it is merely
+// early.
+func (s *Service) Snapshot(ctx context.Context) (*State, error) {
+	st := &State{Workspaces: []Workspace{}, Agents: []Agent{}}
+	if s.herdrBin == "" {
+		return st, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.herdrBin, "api", "snapshot")
+	cmd.Env = s.env()
+	out, err := cmd.Output()
+	if err != nil {
+		return st, nil
+	}
+
+	var raw rawSnapshot
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return st, fmt.Errorf("parse herdr snapshot: %w", err)
+	}
+	snap := raw.Result.Snapshot
+
+	st.Running = true
+	st.Version = snap.Version
+	st.Protocol = snap.Protocol
+
+	// Index agents by pane so a pane can carry the agent running inside it.
+	byPane := map[string]Agent{}
+	for _, a := range snap.Agents {
+		name := a.Name
+		if name == "" {
+			name = a.PaneID
+		}
+		ag := Agent{
+			Name: name, Kind: a.Agent, Status: a.AgentStatus, Workspace: a.WorkspaceID,
+			PaneID: a.PaneID, Title: a.Title, CWD: a.CWD, Focused: a.Focused,
+		}
+		byPane[a.PaneID] = ag
+		st.Agents = append(st.Agents, ag)
+		if ag.Blocked() {
+			st.Blocked++
+		}
+	}
+
+	panesByTab := map[string][]Pane{}
+	for _, p := range snap.Panes {
+		pane := Pane{
+			ID: p.ID, TabID: p.TabID, WorkspaceID: p.WorkspaceID, Title: p.Title,
+			CWD: p.CWD, Focused: p.Focused, AgentStatus: p.AgentStatus,
+		}
+		if ag, ok := byPane[p.ID]; ok {
+			a := ag
+			pane.Agent = &a
+		}
+		panesByTab[p.TabID] = append(panesByTab[p.TabID], pane)
+	}
+
+	tabsByWorkspace := map[string][]Tab{}
+	for _, t := range snap.Tabs {
+		tab := Tab{
+			ID: t.ID, WorkspaceID: t.WorkspaceID, Label: t.Label, Number: t.Number,
+			Focused: t.Focused, AgentStatus: t.AgentStatus, Panes: panesByTab[t.ID],
+		}
+		if tab.Panes == nil {
+			tab.Panes = []Pane{}
+		}
+		tabsByWorkspace[t.WorkspaceID] = append(tabsByWorkspace[t.WorkspaceID], tab)
+	}
+
+	for _, ws := range snap.Workspaces {
+		w := Workspace{
+			ID: ws.ID, Label: ws.Label, Number: ws.Number, Focused: ws.Focused,
+			AgentStatus: ws.AgentStatus, TabCount: ws.TabCount, PaneCount: ws.PaneCount,
+			Tabs: tabsByWorkspace[ws.ID],
+		}
+		if w.Tabs == nil {
+			w.Tabs = []Tab{}
+		}
+		st.Workspaces = append(st.Workspaces, w)
+	}
+	return st, nil
 }

@@ -118,6 +118,20 @@ func cmdServe(args []string) error {
 	ptys := terminal.NewManager(ctx, termSvc, 4)
 	defer ptys.CloseAll()
 
+	// Hit the ground running: a headless box has no Herdr server until someone
+	// starts a client, so herdrer starts one itself rather than showing an
+	// empty agent board and leaving the human to guess why. Failure is logged,
+	// not fatal — the review inbox is useful without a shell, and refusing to
+	// boot over this would take out the one tool you use to fix the box.
+	if cfg.TerminalEnabled {
+		go func() {
+			if err := termSvc.EnsureServer(ctx); err != nil {
+				slog.Warn("could not start a herdr server", "err", err)
+			}
+		}()
+		defer termSvc.StopKeeper()
+	}
+
 	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus, version)
 
 	n, err := st.CountUsers(ctx)

@@ -115,6 +115,7 @@ var everyRoute = []route{
 	{"POST", "/api/v1/push/test", "session"},
 	{"GET", "/api/v1/audit", "session"},
 	{"GET", "/api/v1/agents", "session"},
+	{"GET", "/api/v1/herdr/state", "session"},
 	{"POST", "/api/v1/terminal/ticket", "session"},
 	{"POST", "/api/v1/stream/ticket", "session"},
 

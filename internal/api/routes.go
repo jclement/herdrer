@@ -81,6 +81,7 @@ func (s *Server) routes() http.Handler {
 	// the terminal. A ticket is minted by an authenticated same-origin fetch
 	// and redeemed once, seconds later, on the upgrade.
 	human("GET /api/v1/agents", s.handleListAgents)
+	human("GET /api/v1/herdr/state", s.handleHerdrState)
 	human("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	human("POST /api/v1/stream/ticket", s.handleStreamTicket)
 

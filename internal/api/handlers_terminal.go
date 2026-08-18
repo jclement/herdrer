@@ -10,6 +10,16 @@ import (
 	"github.com/jclement/herdrer/internal/notify"
 )
 
+// handleHerdrState returns the whole session tree for the agents UI.
+func (s *Server) handleHerdrState(w http.ResponseWriter, r *http.Request) {
+	st, err := s.terminal.Snapshot(r.Context())
+	if err != nil {
+		Internal(w, err, "herdr snapshot")
+		return
+	}
+	WriteJSON(w, http.StatusOK, st)
+}
+
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents, err := s.terminal.Agents(r.Context())
 	if err != nil {
