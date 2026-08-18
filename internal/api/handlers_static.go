@@ -43,10 +43,18 @@ func (s *Server) spaHandler() http.Handler {
 			files.ServeHTTP(w, r)
 			return
 		}
-		// Client-side routing: unknown paths fall through to the app shell,
-		// except API and socket paths, which must 404 honestly.
-		if strings.HasPrefix(p, "api/") || strings.HasPrefix(p, "ws/") {
-			WriteError(w, http.StatusNotFound, CodeNotFound, "no such endpoint")
+		// Client-side routing: unknown paths fall through to the app shell so
+		// that /r/<id> works on a cold load. Everything that is unambiguously
+		// not a route must 404 honestly instead.
+		//
+		// The asset case is the one that bites. Serving index.html with a 200
+		// for a missing /assets/*.js means a renamed or unbuilt bundle arrives
+		// at the browser as HTML, and surfaces as "Unexpected token '<'" from
+		// somewhere deep in a script — which is a genuinely hard bug to read
+		// backwards. The sandboxed mermaid bundle is loaded by absolute path
+		// from an opaque origin, where that diagnosis is harder still.
+		if isNotARoute(p) {
+			WriteError(w, http.StatusNotFound, CodeNotFound, "not found")
 			return
 		}
 		index, err := fs.ReadFile(sub, "index.html")
@@ -58,6 +66,23 @@ func (s *Server) spaHandler() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(index)
 	})
+}
+
+// isNotARoute reports whether a path could never be a client-side route, and
+// therefore deserves a 404 rather than the app shell.
+func isNotARoute(p string) bool {
+	switch {
+	case strings.HasPrefix(p, "api/"), strings.HasPrefix(p, "ws/"),
+		strings.HasPrefix(p, "assets/"), strings.HasPrefix(p, "icons/"):
+		return true
+	}
+	// A path whose last segment carries a file extension is a missing asset,
+	// not a route: the SPA's routes are all extensionless.
+	last := p
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		last = p[i+1:]
+	}
+	return strings.Contains(last, ".")
 }
 
 const placeholderHTML = `<!doctype html><meta charset="utf-8">

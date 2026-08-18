@@ -463,3 +463,38 @@ func loginAsWithID(t *testing.T, s *Server, u *store.User) (*http.Cookie, string
 	c := loginAs(t, s, u)
 	return c, store.HashToken(c.Value)
 }
+
+// TestMissingAssetIs404NotTheAppShell guards a failure mode that is very hard
+// to diagnose from the symptom.
+//
+// If a missing /assets/*.js returns index.html with a 200, the browser tries to
+// parse HTML as JavaScript and reports "Unexpected token '<'" from inside an
+// unrelated script. For the mermaid bundle — loaded by absolute path inside an
+// opaque-origin sandboxed frame — that diagnosis is worse still. A rename must
+// fail as a 404.
+func TestMissingAssetIs404NotTheAppShell(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	for _, p := range []string{
+		"/assets/does-not-exist.js",
+		"/assets/mermaid-frame.js",
+		"/icons/nope.png",
+		"/favicon.ico",
+		"/r/some-id/thing.js",
+	} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		if w.Code == http.StatusOK && strings.Contains(w.Header().Get("Content-Type"), "text/html") {
+			t.Errorf("%s served the app shell with 200; a missing asset must 404", p)
+		}
+	}
+}
+
+// TestClientRoutesStillFallThrough is the other half: deep links must survive a
+// cold load, or every push notification tap lands on a 404.
+func TestClientRoutesStillFallThrough(t *testing.T) {
+	for _, p := range []string{"/", "/r/rv_abc123", "/agents", "/settings/passkeys"} {
+		if isNotARoute(strings.TrimPrefix(p, "/")) {
+			t.Errorf("%s was classified as a missing asset; it is a client route", p)
+		}
+	}
+}
