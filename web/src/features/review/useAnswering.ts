@@ -4,7 +4,7 @@ import { useAnswerReview } from "../../lib/queries";
 import { drafts } from "../../lib/storage";
 import { useToast } from "../../components/toast";
 import type { ReviewItem } from "../../lib/types";
-import { isFreeText, optionLabel, recommendedKey } from "./answer";
+import { isFreeText, optionLabel, recommendedKey, sendableValue } from "./answer";
 
 /**
  * The answering half of a review item, shared by the page and the overlay.
@@ -60,8 +60,10 @@ export function useAnswering(
   const submit = () => {
     if (!item) return;
     const free = isFreeText(item);
-    const value = free ? note.trim() : (selected ?? "");
-    if (value === "") return;
+    // The same guard the Send button is disabled by, so a keyboard Enter or a
+    // programmatic call cannot send what the bar is not showing.
+    const value = sendableValue(item, selected, note);
+    if (value === null) return;
     answer.mutate(
       { value, note: free ? undefined : note },
       {

@@ -25,6 +25,7 @@ import type { QueueItem } from "../../lib/reviewQueue";
 import { shortAge } from "../../lib/format";
 import { useIsDesktop } from "../../lib/layout";
 import { useVisualViewport } from "../../lib/viewport";
+import { parked } from "../../lib/storage";
 import { Chip, EmptyState, cx } from "../../components/ui";
 import { Sheet } from "../../components/Sheet";
 import { ReviewSheet } from "./ReviewSheet";
@@ -120,7 +121,8 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   const desktop = useIsDesktop();
   const reviews = useReviews("all");
 
-  const [deferred, setDeferred] = useState<string[]>([]);
+  // Seeded from localStorage: a defer that a reload forgets is a defer that lied.
+  const [deferred, setDeferred] = useState<string[]>(() => parked.read());
   /** Answered or dismissed here, before the list refetch catches up. */
   const [settled, setSettled] = useState<string[]>([]);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -207,7 +209,11 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
 
   // Going looking is the opposite of being interrupted: it lifts the quiet.
   const openItem = useCallback((id: string) => {
-    setDeferred((d) => d.filter((x) => x !== id));
+    setDeferred((d) => {
+      const next = d.filter((x) => x !== id);
+      parked.write(next);
+      return next;
+    });
     setPinned(id);
     setQuietSince(null);
     setStackOpen(false);
@@ -227,7 +233,12 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const defer = useCallback((id: string) => {
-    setDeferred((d) => (d.includes(id) ? d : [...d, id]));
+    setDeferred((d) => {
+      if (d.includes(id)) return d;
+      const next = [...d, id];
+      parked.write(next);
+      return next;
+    });
     setPinned((p) => (p === id ? null : p));
     setQuietSince(Date.now());
   }, []);
@@ -294,10 +305,6 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
           armed={pinned === plan.sheet}
           onClose={() => (desktop ? unpin(plan.sheet!) : defer(plan.sheet!))}
           onAnswered={() => settle(plan.sheet!)}
-          // "Show the next one" is a phone affordance: it exists because the
-          // rest of the queue is invisible behind the sheet. On a desktop the
-          // rest of the queue is a click away in the rail.
-          onNext={!desktop && plan.waiting > 0 ? () => defer(plan.sheet!) : undefined}
         />
       )}
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { lockScroll, pushEscape } from "../lib/overlay";
 import { cx } from "./ui";
 
 /**
@@ -27,16 +28,14 @@ export function Sheet({
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    // Both of these are counted, app-wide: see lib/overlay.ts for why
+    // save-and-restore per surface leaves the page permanently locked.
+    const popEscape = pushEscape(onClose);
+    const unlock = lockScroll();
     ref.current?.focus();
     return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previous;
+      popEscape();
+      unlock();
     };
   }, [open, onClose]);
 

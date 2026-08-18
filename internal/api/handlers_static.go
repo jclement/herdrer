@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/jclement/herdrer/internal/webui"
@@ -33,9 +34,13 @@ func (s *Server) spaHandler() http.Handler {
 		}
 		if f, err := sub.(fs.FS).Open(p); err == nil {
 			f.Close()
-			// Hashed asset filenames are immutable; index.html must not be,
-			// or a deploy leaves phones on the previous build indefinitely.
-			if strings.HasPrefix(p, "assets/") {
+			// Immutable caching is safe only for a filename that changes when
+			// its content does. Vite hashes its asset names, so `assets/` is
+			// nearly all safe — but not entirely: the mermaid bundle is emitted
+			// at a *stable* path on purpose, because the Go renderer injects it
+			// by name into the sandboxed document. Serving that one immutable
+			// for a year means a fix to it never reaches a returning browser.
+			if strings.HasPrefix(p, "assets/") && isContentHashed(p) {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
@@ -66,6 +71,15 @@ func (s *Server) spaHandler() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(index)
 	})
+}
+
+// hashedAsset matches Vite's `name-HASH.ext` output, where the hash is what
+// makes the filename safe to cache forever.
+var hashedAsset = regexp.MustCompile(`-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$`)
+
+// isContentHashed reports whether a filename changes when its content does.
+func isContentHashed(p string) bool {
+	return hashedAsset.MatchString(p)
 }
 
 // isNotARoute reports whether a path could never be a client-side route, and

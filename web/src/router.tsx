@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import {
   Outlet,
   createRootRoute,
@@ -17,10 +17,33 @@ import { Login } from "./features/auth/Login";
 import { InboxPage } from "./features/review/InboxPage";
 import { ItemPage } from "./features/review/ItemPage";
 import { ReviewQueueProvider } from "./features/review/ReviewQueue";
-import { AgentsPage } from "./features/agents/AgentsPage";
-import { TerminalPage } from "./features/agents/TerminalPage";
-import { SettingsPage } from "./features/settings/SettingsPage";
 import { NotFound, RouteError } from "./features/misc/Pages";
+
+/**
+ * The terminal, the agents board and settings are split out of the entry chunk.
+ *
+ * The product's primary entry path is a push notification tap landing on
+ * `/r/$id`, and `TerminalPage` statically imports `@xterm/xterm`, its fit addon
+ * and its stylesheet — the single biggest passenger in a 781 kB bundle, loaded
+ * on a phone, over LTE, before the question can render. None of these three is
+ * on that path. The review surfaces stay eagerly imported for the same reason:
+ * a second round trip in front of the thing someone was paged about is worse
+ * than the bytes.
+ */
+const TerminalPage = lazy(() =>
+  import("./features/agents/TerminalPage").then((m) => ({ default: m.TerminalPage })),
+);
+const AgentsPage = lazy(() =>
+  import("./features/agents/AgentsPage").then((m) => ({ default: m.AgentsPage })),
+);
+const SettingsPage = lazy(() =>
+  import("./features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+
+/** A chunk arriving is not an event worth a spinner unless it is slow. */
+function Lazy({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<Spinner label="" />}>{children}</Suspense>;
+}
 
 /**
  * The information architecture, inverted.
@@ -119,7 +142,11 @@ const rootRoute = createRootRoute({
 const terminalRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: TerminalPage,
+  component: () => (
+    <Lazy>
+      <TerminalPage />
+    </Lazy>
+  ),
   /**
    * `session` is a herdr session name; absent means the default session, which
    * is the one /agents renders. `pane` is only a note to the human about where
@@ -152,7 +179,11 @@ const itemRoute = createRoute({
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/agents",
-  component: AgentsPage,
+  component: () => (
+    <Lazy>
+      <AgentsPage />
+    </Lazy>
+  ),
 });
 
 /**
@@ -167,13 +198,21 @@ const legacyTerminalRoute = createRoute({
   beforeLoad: () => {
     throw redirect({ to: "/" });
   },
-  component: TerminalPage,
+  component: () => (
+    <Lazy>
+      <TerminalPage />
+    </Lazy>
+  ),
 });
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: SettingsPage,
+  component: () => (
+    <Lazy>
+      <SettingsPage />
+    </Lazy>
+  ),
 });
 
 const routeTree = rootRoute.addChildren([

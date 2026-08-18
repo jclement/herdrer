@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Inbox, Layers, Terminal } from "lucide-react";
 import type { QueueItem } from "../../lib/reviewQueue";
-import { shortAge } from "../../lib/format";
 import { Chip, cx } from "../../components/ui";
+import { Timing } from "./Timing";
 
 /**
  * The queue, permanently, beside the terminal.
@@ -92,9 +92,9 @@ export function ReviewRail({
                         </Chip>
                       )}
                       {deferred.includes(i.id) && <Chip>later</Chip>}
-                      <span className="font-mono text-[11px] text-muted tabular-nums">
-                        {shortAge(i.created_at)}
-                      </span>
+                      {/* Same field, same order, as the inbox row and the
+                          detail head — see features/review/Timing.tsx. */}
+                      <Timing createdAt={i.created_at} expiresAt={i.expires_at} />
                     </div>
                   </div>
                   <ChevronRight className="mt-0.5 w-4 h-4 shrink-0 text-muted" aria-hidden />

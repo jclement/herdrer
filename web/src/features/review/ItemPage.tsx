@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Link2, Monitor, Terminal, Trash2 } from "lucide-react";
+import { Link2, Terminal, Trash2 } from "lucide-react";
 import { ApiError, describeError } from "../../lib/api";
 import { useDismissReview, useReview } from "../../lib/queries";
 import { scrollMemory } from "../../lib/storage";
@@ -10,6 +10,7 @@ import { useToast } from "../../components/toast";
 import { ReviewBody } from "./ReviewBody";
 import { ActionBar } from "./ActionBar";
 import { useAnswering } from "./useAnswering";
+import { useReviewQueue } from "./ReviewQueue";
 import { isAnswerable } from "./answer";
 
 /**
@@ -30,7 +31,11 @@ export function ItemPage() {
 
   const { data: item, isPending, error, refetch } = useReview(id);
   const dismiss = useDismissReview();
+  const queue = useReviewQueue();
   const [moreOpen, setMoreOpen] = useState(false);
+  // Measured, not guessed: the bar is an option row taller per option and ~60px
+  // taller again with the note open.
+  const [barHeight, setBarHeight] = useState(176);
   const restored = useRef(false);
 
   const answering = useAnswering(id, item, {
@@ -39,18 +44,54 @@ export function ItemPage() {
     onConflict: () => void refetch(),
   });
 
-  // Coming back from the diagram viewer or the terminal must not land at the top.
+  /*
+   * Coming back from the diagram viewer or the terminal must not land at the top.
+   *
+   * The restore waits for the page to be tall enough to hold the saved offset.
+   * The document is a sandboxed iframe that starts 240px tall and only reaches
+   * its real height once it has posted one — several seconds later on a phone
+   * with diagrams in it — so restoring the moment `item` resolves means the
+   * browser clamps the scroll to a short page and the restore lands wrong on
+   * every item that has a document. Which is all of them.
+   */
   useEffect(() => {
     if (!item || restored.current) return;
-    restored.current = true;
     const y = scrollMemory.read(id);
-    if (y > 0) window.scrollTo(0, y);
+    if (y <= 0) {
+      restored.current = true;
+      return;
+    }
+    let frame = 0;
+    const deadline = Date.now() + 8000;
+    const attempt = () => {
+      if (restored.current) return;
+      const room = document.documentElement.scrollHeight - window.innerHeight;
+      if (room >= y) {
+        restored.current = true;
+        window.scrollTo(0, y);
+        return;
+      }
+      if (Date.now() > deadline) {
+        restored.current = true;
+        window.scrollTo(0, Math.max(0, room));
+        return;
+      }
+      frame = window.requestAnimationFrame(attempt);
+    };
+    frame = window.requestAnimationFrame(attempt);
+    return () => window.cancelAnimationFrame(frame);
   }, [item, id]);
 
+  // `scrollMemory.remember` coalesces to one write per frame: the naive version
+  // called sessionStorage.setItem synchronously on every scroll event, which on
+  // iOS momentum scrolling is ~60 synchronous writes a second.
   useEffect(() => {
-    const onScroll = () => scrollMemory.write(id, window.scrollY);
+    const onScroll = () => scrollMemory.remember(id, window.scrollY);
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      scrollMemory.flush();
+    };
   }, [id]);
 
   if (isPending) return <SkeletonRows rows={6} />;
@@ -69,7 +110,7 @@ export function ItemPage() {
   const answerable = isAnswerable(item);
 
   return (
-    <div className="pb-[calc(env(safe-area-inset-bottom,0px)+10rem)]">
+    <div style={{ paddingBottom: answerable ? barHeight + 24 : 24 }}>
       <ReviewBody item={item} selected={answering.selected} onSelect={answering.setSelected} />
 
       {!answerable && (
@@ -93,6 +134,12 @@ export function ItemPage() {
           onSubmit={answering.submit}
           submitting={answering.submitting}
           onMore={() => setMoreOpen(true)}
+          onHeight={setBarHeight}
+          onPark={() => {
+            queue.defer(item.id);
+            toast.show("Parked. Nothing was sent — it is still waiting for you.");
+            void navigate({ to: "/inbox" });
+          }}
         />
       )}
 
@@ -101,7 +148,10 @@ export function ItemPage() {
           Order is a safety property here. Copy-link and open-terminal are the
           two anyone reaches for; Dismiss cancels the item and tells the agent
           nothing was decided, so it sits last, behind a confirm, furthest from
-          where a thumb lands when the sheet rises.
+          where a thumb lands when the sheet rises. "Park it" is not in here at
+          all any more — deferring is the second most likely correct outcome on
+          a phone and it does not belong two taps behind an unlabelled glyph,
+          sharing a menu with the one destructive action.
         */}
         <div className="divide-y divide-border pb-2">
           <SheetAction
@@ -126,20 +176,6 @@ export function ItemPage() {
             onClick={() => {
               setMoreOpen(false);
               void navigate({ to: "/" });
-            }}
-          />
-          <SheetAction
-            icon={<Monitor className="w-4 h-4" />}
-            label="Needs a real screen"
-            detail="Keeps the item open and leaves your note. Nothing is sent."
-            onClick={() => {
-              answering.setNote(
-                answering.note.trim() === ""
-                  ? "Seen on a phone — I'll answer this properly at a keyboard. Park it, don't guess."
-                  : answering.note,
-              );
-              setMoreOpen(false);
-              toast.show("Note staged. Send it when you're ready.");
             }}
           />
           <SheetAction

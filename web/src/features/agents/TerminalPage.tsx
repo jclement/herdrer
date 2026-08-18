@@ -20,12 +20,14 @@ import { ApiError, api, describeError, wsURL } from "../../lib/api";
 import { stepUp } from "../../lib/stepup";
 import type { Ticket } from "../../lib/types";
 import { flags } from "../../lib/storage";
+import { lockScroll } from "../../lib/overlay";
 import { useIsDesktop } from "../../lib/layout";
 import { cssReader, terminalFont, terminalTheme } from "../../lib/termTheme";
 import { useVisualViewport } from "../../lib/viewport";
 import { humanBytes, imageFromTransfer, sendImage, uploadPaste } from "../../lib/paste";
 import { useBootstrap } from "../../lib/queries";
 import { Button, cx } from "../../components/ui";
+import { ScrollX } from "../../components/ScrollX";
 import { BottomNav, HeaderNav, ThemeToggle } from "../../components/AppShell";
 import { useToast } from "../../components/toast";
 import { useReviewQueue } from "../review/ReviewQueue";
@@ -178,16 +180,7 @@ export function TerminalPage() {
 
   // No page scroll at all on this route: that removes the whole class of
   // terminal-scroll-versus-page-scroll gesture conflict rather than arbitrating it.
-  useEffect(() => {
-    const prevBody = document.body.style.overflow;
-    const prevHtml = document.documentElement.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prevBody;
-      document.documentElement.style.overflow = prevHtml;
-    };
-  }, []);
+  useEffect(() => lockScroll(), []);
 
   // Build the terminal once; font size changes are applied in place.
   useEffect(() => {
@@ -1001,7 +994,9 @@ function ModifierBar({
         paddingBottom: vv.keyboardOpen ? 0 : "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <div className="scroll-x no-scrollbar flex items-center gap-1 px-2 py-1.5">
+      {/* Twenty-two 44px keys: this one genuinely has to scroll, so it says
+          so — ScrollX fades whichever edge still has keys behind it. */}
+      <ScrollX className="flex items-center gap-1 px-2 py-1.5">
         <button
           aria-label="Release control"
           onClick={onRelease}
@@ -1058,7 +1053,7 @@ function ModifierBar({
         >
           <Keyboard className="w-4 h-4" />
         </button>
-      </div>
+      </ScrollX>
     </div>
   );
 }

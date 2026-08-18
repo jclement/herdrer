@@ -1,27 +1,14 @@
 import { useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ExternalLink,
-  GitBranch,
-  Hourglass,
-  Maximize2,
-  Star,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, GitBranch, Maximize2 } from "lucide-react";
 import type { ReviewItem } from "../../lib/types";
-import { absoluteTime, shortAge, secondsUntil, shortDuration } from "../../lib/format";
+import { absoluteTime } from "../../lib/format";
 import { evidenceSections, jumpLabel } from "../../lib/attachments";
 import { Chip, SectionHeader, cx } from "../../components/ui";
 import { DocumentFrame, renderURL } from "./DocumentFrame";
 import { FullscreenDocument, AttachmentList } from "./Attachments";
 import { OptionCards } from "./OptionCards";
-import {
-  answerOptions,
-  isAnswerable,
-  optionLabel,
-  recommendedKey,
-  unanswerableReason,
-} from "./answer";
+import { Timing } from "./Timing";
+import { answerOptions, isAnswerable, unanswerableReason } from "./answer";
 
 /**
  * The document itself: the question, the evidence, and the options.
@@ -39,30 +26,37 @@ import {
  *
  * The visual order is an argument about attention. The question is the loudest
  * thing on the screen — larger and heavier than anything below it, including
- * the recommendation — because everything else here exists to answer it. Then
- * the facts that qualify it, then the opinion, then the options, then the
+ * the agent's own headings inside the rendered document, whose scale is set on
+ * the server (internal/review/render.go: h1 16px, h2/h3 15px) and has to stay
+ * under this one. Then the facts that qualify it, then the options, then the
  * evidence. Anything that inverts that order is asking the reader to decide
  * before they have read the question.
+ *
+ * There is no recommendation banner any more. The recommendation was on screen
+ * four times — a banner, a pill on the option card, a tinted letter badge, and
+ * an accent mark in the action bar — and the banner was the one carrying no
+ * information the option card 100px below it did not, verbatim, including the
+ * label string. A thing said four times reads as a thing that does not trust
+ * itself. The opinion survives as the star on the option it points at.
+ *
+ * The `choice` / `ack` / `confirm` chip is gone for the same kind of reason:
+ * it is the API's vocabulary, not a reader's, and on a screen already showing
+ * two labelled options it says nothing at all.
  */
 export function ReviewBody({
   item,
   selected,
   onSelect,
-  /** Inside a sheet the surrounding container is the scroller, not the window. */
-  inSheet = false,
 }: {
   item: ReviewItem;
   selected: string | null;
   onSelect: (key: string) => void;
-  inSheet?: boolean;
 }) {
   const [docFull, setDocFull] = useState(false);
 
   const sections = evidenceSections(item.attachments);
 
   const answerable = isAnswerable(item);
-  const rec = recommendedKey(item);
-  const expiresIn = secondsUntil(item.expires_at);
   const options = answerOptions(item);
   const blocking = item.urgency === "blocking";
 
@@ -79,35 +73,39 @@ export function ReviewBody({
           blocking ? "border-l-danger bg-danger-weak/40" : "border-l-transparent",
         )}
       >
-        <h1
-          className={cx(
-            "font-semibold tracking-tight text-heading",
-            // `break-words` because agents title things with file paths.
-            "leading-[1.3] break-words text-pretty",
-            inSheet ? "text-[15px]" : "text-lg",
-          )}
-        >
+        {/*
+          One title size, in the page and in the sheet alike. They show the same
+          document; when the same question is 18px in one shell and 15px in the
+          other, the difference is read as meaning and there is none.
+        */}
+        <h1 className="text-xl font-semibold leading-[1.3] tracking-tight text-heading break-words text-pretty">
           {item.title}
         </h1>
 
-        {/* 2 — the context strip: one line, scrolls, never wraps. */}
-        <div className="scroll-x no-scrollbar mt-2 flex items-center gap-1 pb-2.5">
-          {blocking && <Chip tone="danger">blocking</Chip>}
-          <Chip tone="accent">{item.kind}</Chip>
+        {/*
+          2 — the deadline, then the provenance.
+
+          The timing goes first and never scrolls: it is the input to "answer
+          this now or put it down", and it used to be the one fact a 375px
+          screen clipped off the right-hand edge of a suppressed-scrollbar chip
+          strip. The rest wraps rather than scrolling for the same reason —
+          `body { overflow-x: hidden }` means anything that escapes a scroller
+          is discarded, not reachable.
+        */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Timing createdAt={item.created_at} expiresAt={item.expires_at} />
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 pb-2.5">
           {item.context?.worker && <Chip title="worker">{item.context.worker}</Chip>}
           {item.context?.repo && (
-            <Chip title="repo">
-              <GitBranch className="w-3 h-3" />
-              {item.context.branch
-                ? `${item.context.repo}@${item.context.branch}`
-                : item.context.repo}
-            </Chip>
-          )}
-          <Chip title={absoluteTime(item.created_at)}>{shortAge(item.created_at)} old</Chip>
-          {expiresIn !== null && expiresIn > 0 && (
-            <Chip tone={expiresIn < 3600 ? "warn" : "default"}>
-              <Hourglass className="w-3 h-3" />
-              {shortDuration(expiresIn)} left
+            <Chip title="repo" className="max-w-full">
+              <GitBranch className="w-3 h-3 shrink-0" />
+              <span className="min-w-0 truncate">
+                {item.context.branch
+                  ? `${item.context.repo}@${item.context.branch}`
+                  : item.context.repo}
+              </span>
             </Chip>
           )}
           {item.source === "herdr" && <Chip tone="warn">unstructured · TUI prompt</Chip>}
@@ -116,10 +114,7 @@ export function ReviewBody({
 
       {!answerable && <StatusBanner reason={unanswerableReason(item)} item={item} />}
 
-      {/* 3 — the recommendation, called out. */}
-      {answerable && rec && <Recommendation item={item} rec={rec} />}
-
-      {/* 4 — option cards. Same selection state as the bar. */}
+      {/* 3 — option cards. Same selection state as the bar. */}
       {options.length > 0 && (
         <OptionCards item={item} selected={selected} onSelect={onSelect} disabled={!answerable} />
       )}
@@ -140,7 +135,7 @@ export function ReviewBody({
           title="Detail"
           right={
             <button
-              className="-mr-1 flex h-8 items-center gap-1 rounded px-1.5 text-[11px] text-accent transition-colors hover:bg-hover"
+              className="-mr-1 flex min-h-11 items-center gap-1 rounded px-1.5 text-[11px] text-accent transition-colors hover:bg-hover"
               onClick={() => setDocFull(true)}
             >
               <Maximize2 className="w-3.5 h-3.5" />
@@ -205,33 +200,6 @@ export function ReviewBody({
 }
 
 /**
- * The recommendation.
- *
- * An accent slab rather than an outlined box, because it is the one piece of
- * *opinion* on the page and it has to be distinguishable from the facts above
- * it and the options below it at a glance. The key is set in mono in a filled
- * badge so it matches the letter on the option card it points at — that
- * correspondence is the whole affordance.
- */
-function Recommendation({ item, rec }: { item: ReviewItem; rec: string }) {
-  const label = optionLabel(item, rec);
-  return (
-    <div className="mx-3 mb-3 flex items-start gap-2.5 rounded-md border border-accent/40 bg-accent-weak px-3 py-2.5">
-      <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent font-mono text-[11px] font-semibold text-accent-fg">
-        {rec.slice(0, 1).toUpperCase()}
-      </span>
-      <div className="min-w-0 flex-1 text-sm leading-snug text-heading">
-        <span className="inline-flex items-center gap-1 font-semibold">
-          <Star className="w-3.5 h-3.5 text-accent" aria-hidden />
-          Recommended: {rec}
-        </span>
-        {label !== rec && <span className="text-body"> — {label}</span>}
-      </div>
-    </div>
-  );
-}
-
-/**
  * One tap to each piece of evidence.
  *
  * Anchors rather than state, so it works identically in the page and in the
@@ -241,7 +209,7 @@ function Recommendation({ item, rec }: { item: ReviewItem; rec: string }) {
 function EvidenceIndex({ sections }: { sections: ReturnType<typeof evidenceSections> }) {
   if (sections.length < 2) return null;
   return (
-    <div className="scroll-x no-scrollbar flex items-center gap-1.5 border-y border-border bg-surface-2 px-3 py-1.5">
+    <div className="flex flex-wrap items-center gap-1.5 border-y border-border bg-surface-2 px-3 py-1.5">
       <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted">
         Evidence
       </span>
@@ -253,7 +221,7 @@ function EvidenceIndex({ sections }: { sections: ReturnType<typeof evidenceSecti
               .getElementById(s.anchor)
               ?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
-          className="flex h-8 shrink-0 items-center rounded border border-border bg-surface px-2.5 text-[11px] text-body transition-colors hover:border-accent/50 hover:text-accent"
+          className="flex min-h-11 shrink-0 items-center rounded border border-border bg-surface px-2.5 text-[11px] text-body transition-colors hover:border-accent/50 hover:text-accent"
         >
           {jumpLabel(s)}
         </button>

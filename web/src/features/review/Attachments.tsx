@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { Attachment } from "../../lib/types";
 import { diffStat, hasUnifiedDiff } from "../../lib/attachments";
+import { lockScroll, pushEscape } from "../../lib/overlay";
 import { DocumentFrame, renderURL } from "./DocumentFrame";
 import { DiffView } from "./DiffView";
 import { cx } from "../../components/ui";
@@ -207,13 +208,14 @@ export function FullscreenDocument({
 }) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    // Counted, app-wide (lib/overlay.ts). This viewer is routinely opened from
+    // inside a sheet, which is exactly the interleaving that used to leave the
+    // page unscrollable.
+    const popEscape = pushEscape(onClose);
+    const unlock = lockScroll();
     return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
+      popEscape();
+      unlock();
     };
   }, [open, onClose]);
 

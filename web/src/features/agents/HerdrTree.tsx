@@ -69,7 +69,10 @@ export function HerdrTree({
           </div>
         }
       />
-      <div className="scroll-x no-scrollbar flex items-center gap-1 border-b border-border bg-surface-2 px-3 py-1.5">
+      {/* Counts wrap rather than scroll: five chips that do not fit are two
+          short lines, and two short lines beat one line with facts amputated
+          at the bezel — `body { overflow-x: hidden }` discards what escapes. */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-border bg-surface-2 px-3 py-1.5">
         <Count icon={<Boxes className="w-3 h-3" />} n={summary.workspaces} label="workspaces" />
         <Count icon={<Columns2 className="w-3 h-3" />} n={summary.tabs} label="tabs" />
         <Count icon={<Terminal className="w-3 h-3" />} n={summary.panes} label="panes" />
@@ -194,7 +197,10 @@ function PaneRow({
           {pane.focused && <span className="text-[10px] text-accent">focused</span>}
         </div>
 
-        <div className="mt-0.5 flex items-center gap-1 overflow-x-auto no-scrollbar text-[11px] text-muted">
+        {/* Wraps. It used to be a scrollbar-less horizontal scroller, so on a
+            phone the working directory — the part that says *which* checkout
+            this pane is in — was simply cut off at the bezel. */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-muted">
           <span className="shrink-0 font-mono">{pane.id}</span>
           {showWhere && (
             <span className="shrink-0">
@@ -203,9 +209,9 @@ function PaneRow({
           )}
           {agent?.kind && <span className="shrink-0">· {agent.kind}</span>}
           {pane.cwd && (
-            <span className="flex shrink-0 items-center gap-0.5" title={pane.cwd}>
-              · <Folder className="w-3 h-3" />
-              <span className="font-mono">{shortPath(pane.cwd)}</span>
+            <span className="flex min-w-0 items-center gap-0.5" title={pane.cwd}>
+              · <Folder className="w-3 h-3 shrink-0" />
+              <span className="min-w-0 truncate font-mono">{shortPath(pane.cwd)}</span>
             </span>
           )}
         </div>

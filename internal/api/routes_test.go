@@ -713,3 +713,28 @@ func TestDeletedCredentialClosesTheTerminalCleanly(t *testing.T) {
 		t.Fatalf("got %d, want 403", w.Code)
 	}
 }
+
+// TestOnlyHashedAssetsAreCachedForever guards a year-long cache poisoning of
+// our own making.
+//
+// Vite hashes asset filenames, which is what makes `immutable` safe — but the
+// mermaid bundle is deliberately emitted at a *stable* path so the Go renderer
+// can inject it by name. Serving that immutable meant a fix to it would never
+// reach a browser that had already loaded it, for a year, with no way to
+// invalidate short of renaming.
+func TestOnlyHashedAssetsAreCachedForever(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		hashed bool
+	}{
+		{"assets/index-Bt8yHWuy.js", true},
+		{"assets/index-C3ox_Si4.css", true},
+		{"assets/mermaid-frame.js", false}, // stable by design
+		{"assets/sw.js", false},
+		{"index.html", false},
+	} {
+		if got := isContentHashed(tc.path); got != tc.hashed {
+			t.Errorf("isContentHashed(%q) = %v, want %v", tc.path, got, tc.hashed)
+		}
+	}
+}

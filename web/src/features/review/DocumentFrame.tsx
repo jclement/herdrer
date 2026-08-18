@@ -56,7 +56,29 @@ export function DocumentFrame({ src, title, maxHeight, className }: DocumentFram
   const [failed, setFailed] = useState(false);
   const themed = withTheme(src, theme);
 
+  /*
+   * Heights arrive in bursts and are applied once per frame.
+   *
+   * Mermaid lands 3.4 MB late — five to eight seconds on LTE — and then the
+   * frame posts a height per rendered diagram plus one more after
+   * `document.fonts.ready`. Applying each one as it arrives is N+2 separate
+   * layout changes, each worth hundreds of pixels, arriving in a burst after
+   * the reader has started reading, and everything below the frame walks down
+   * the page under their thumb. Coalescing to the last value in a frame does
+   * not make the document arrive sooner; it makes it arrive once.
+   */
   useEffect(() => {
+    let queued: number | null = null;
+    let frameId = 0;
+
+    const flush = () => {
+      frameId = 0;
+      if (queued === null) return;
+      const h = queued;
+      queued = null;
+      setHeight(h);
+    };
+
     const onMessage = (ev: MessageEvent) => {
       const frame = ref.current;
       if (!frame || ev.source !== frame.contentWindow) return;
@@ -68,10 +90,19 @@ export function DocumentFrame({ src, title, maxHeight, className }: DocumentFram
       if (msg.type !== "herdrer:height") return;
       const h = Number(msg.height);
       if (!Number.isFinite(h) || h <= 0) return;
-      setHeight(Math.min(Math.ceil(h), MAX_HEIGHT));
+      queued = Math.min(Math.ceil(h), MAX_HEIGHT);
+      if (typeof window.requestAnimationFrame !== "function") {
+        flush();
+        return;
+      }
+      if (frameId === 0) frameId = window.requestAnimationFrame(flush);
     };
+
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      if (frameId !== 0) window.cancelAnimationFrame(frameId);
+    };
   }, []);
 
   /*

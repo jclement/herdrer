@@ -66,3 +66,29 @@ export function unanswerableReason(item: ReviewItem): string {
       return "";
   }
 }
+
+/**
+ * What Send would submit, or null if Send must stay disabled.
+ *
+ * This is the guard behind the worst bug the redesign had to fix: the action
+ * bar used to hold its options in a horizontal scroller with the scrollbar
+ * suppressed, so on a 375px phone you could commit an irreversible answer while
+ * the app showed you a button reading `Dep`. The scroller is gone — the bar now
+ * renders every option, full width, unclipped — and this function is the
+ * invariant that keeps it that way: Send only ever sends a value the bar is
+ * currently displaying. A selection that is not one of the item's options
+ * (a stale key from a refetch, a URL parameter naming an option the agent
+ * withdrew) is not sendable, it is a disabled button.
+ */
+export function sendableValue(
+  item: ReviewItem,
+  selected: string | null,
+  note: string,
+): string | null {
+  if (isFreeText(item)) {
+    const text = note.trim();
+    return text === "" ? null : text;
+  }
+  if (selected === null) return null;
+  return answerOptions(item).some((o) => o.key === selected) ? selected : null;
+}

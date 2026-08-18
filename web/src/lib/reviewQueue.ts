@@ -70,6 +70,8 @@ export interface QueueItem {
   title: string;
   urgency: Urgency;
   created_at: string;
+  /** The deadline. Every surface that lists an item shows it — see Timing.tsx. */
+  expires_at?: string | null;
   /** A herdr-synthesized blocked-pane row rather than an agent's document. */
   provisional: boolean;
 }
@@ -127,6 +129,7 @@ export function toQueueItem(item: ReviewItem): QueueItem {
     title: item.title,
     urgency: item.urgency,
     created_at: item.created_at,
+    expires_at: item.expires_at ?? null,
     provisional: item.source === "herdr",
   };
 }

@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
-import { MessageSquarePlus, MoreHorizontal, Send } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { MessageSquarePlus, MonitorSmartphone, MoreHorizontal, Send, Star } from "lucide-react";
 import type { ReviewItem } from "../../lib/types";
 import { keyboardAnchoredStyle, useVisualViewport } from "../../lib/viewport";
-import { answerOptions, isFreeText, optionLabel } from "./answer";
+import { answerOptions, isFreeText, optionLabel, sendableValue } from "./answer";
 import { Button, cx, inputClass } from "../../components/ui";
 
 /**
@@ -20,6 +20,21 @@ import { Button, cx, inputClass } from "../../components/ui";
  * row of a flex column. Two elements independently chasing `visualViewport`
  * fight during the keyboard animation, and the loser is whichever one the thumb
  * was aiming at.
+ *
+ * The options are **stacked full-width rows, never a horizontal scroller.** The
+ * scroller they replace gave the option strip ~160px of a 375px screen for
+ * ~314px of buttons and then hid the scrollbar, so the recommended option
+ * rendered as `Dep` underneath Send while Send sat there enabled. A control you
+ * can operate without being able to read it is not a layout problem, it is a
+ * correctness problem — see `sendableValue` in ./answer.ts, which is the
+ * invariant that keeps Send pointed at something the bar is actually showing.
+ *
+ * `Park it` is a first-class control for the same reason. "I can't decide this
+ * on a phone" used to be a menu item that staged a note reading *"don't guess"*
+ * — which could not be sent at all on a `choice` (Send needed a selection), and
+ * which, if you selected something to get it sent, reached the agent as *"do B"*
+ * and *"don't guess"* together. It sends nothing now. It is a defer, and it
+ * says so.
  */
 export function ActionBar({
   item,
@@ -30,6 +45,8 @@ export function ActionBar({
   onSubmit,
   submitting,
   onMore,
+  onPark,
+  onHeight,
   anchored = true,
   disabled = false,
 }: {
@@ -41,33 +58,58 @@ export function ActionBar({
   onSubmit: () => void;
   submitting: boolean;
   onMore: () => void;
+  /** Put it down without answering. Sends nothing — not a decision. */
+  onPark?: () => void;
+  /**
+   * The bar's measured height, for the page that has to reserve room under the
+   * document for it. The bar is not a fixed size: it grows by an option row per
+   * option and by ~60px when the note opens, and the page used to reserve a
+   * hardcoded 10rem — which was already wrong and is wronger now that the
+   * options are stacked. The tail of the document is not a thing to hide.
+   */
+  onHeight?: (px: number) => void;
   /** False inside the sheet, whose own container already tracks the keyboard. */
   anchored?: boolean;
   /** Briefly true after an auto-raise, so an in-flight thumb cannot answer. */
   disabled?: boolean;
 }) {
   const vv = useVisualViewport();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteFocused, setNoteFocused] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   const options = answerOptions(item);
   const freeText = isFreeText(item);
+  // With the keyboard up there is room for the note or the options, not both.
+  // The summary line below is what keeps the pending answer legible meanwhile.
   const collapsed = noteFocused && !freeText;
-  const canSend = freeText ? note.trim() !== "" : selected !== null;
+  const sendable = sendableValue(item, selected, note);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || !onHeight) return;
+    onHeight(el.offsetHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => onHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onHeight]);
 
   return (
     <div
+      ref={rootRef}
       style={anchored ? { ...keyboardAnchoredStyle(vv), zIndex: 30 } : undefined}
       className="shrink-0 border-t border-border bg-surface-2/95 backdrop-blur-sm"
     >
       <div
         className="mx-auto w-full max-w-3xl px-2 py-2"
         style={{
-          paddingBottom:
-            vv.keyboardOpen || !anchored
-              ? "0.5rem"
-              : "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+          // The home indicator eats the bottom of the sheet too — `anchored`
+          // says who tracks the keyboard, not whether there is a notch.
+          paddingBottom: vv.keyboardOpen
+            ? "0.5rem"
+            : "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
         }}
       >
         {(noteOpen || freeText) && (
@@ -85,6 +127,62 @@ export function ActionBar({
             autoCapitalize="sentences"
             spellCheck
           />
+        )}
+
+        {collapsed && (
+          <div className="mb-2 flex min-h-9 items-center rounded-md border border-border bg-surface px-2 text-xs text-muted">
+            <span className="truncate">
+              {selected ? `Sending: ${optionLabel(item, selected)}` : "Nothing selected yet"}
+            </span>
+          </div>
+        )}
+
+        {!freeText && !collapsed && options.length > 0 && (
+          /*
+           * `flex-wrap` with `basis-full` below `sm`, so every option is its own
+           * full-width row in the thumb arc and nothing is ever clipped. Above
+           * `sm` they sit side by side and wrap when they must. Labels wrap
+           * inside the button rather than truncating: an option you can only
+           * half read is the bug this replaced.
+           */
+          <div
+            role="radiogroup"
+            aria-label="Answer"
+            data-testid="answer-options"
+            className="mb-2 flex flex-wrap items-stretch gap-2"
+          >
+            {options.map((opt) => {
+              const isRec = item.recommend === opt.key;
+              const isSel = selected === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => onSelect(opt.key)}
+                  disabled={disabled}
+                  role="radio"
+                  aria-checked={isSel}
+                  className={cx(
+                    "flex min-h-11 basis-full items-center gap-1.5 rounded-md border px-3 py-2",
+                    "text-left text-sm font-medium sm:flex-1 sm:basis-auto",
+                    "transition-[background-color,border-color,color] duration-150 active:scale-[0.99]",
+                    isSel
+                      ? "border-accent bg-accent text-accent-fg shadow-sm"
+                      : isRec
+                        ? "border-accent/60 bg-accent-weak text-accent"
+                        : "border-border bg-surface text-heading hover:bg-hover",
+                  )}
+                >
+                  {isRec && (
+                    <Star
+                      className={cx("w-3.5 h-3.5 shrink-0", isSel ? "" : "text-accent")}
+                      aria-hidden
+                    />
+                  )}
+                  <span className="min-w-0 flex-1">{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
         )}
 
         <div className="flex items-center gap-2">
@@ -106,53 +204,24 @@ export function ActionBar({
             </button>
           )}
 
-          {collapsed ? (
-            <div className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-md border border-border bg-surface px-2 text-xs text-muted">
-              {selected ? `Selected: ${optionLabel(item, selected)}` : "Nothing selected yet"}
-            </div>
-          ) : freeText ? (
-            <div className="min-w-0 flex-1 text-xs leading-snug text-muted">
-              Free text. The agent reads this.
-            </div>
-          ) : (
-            <div className="scroll-x no-scrollbar flex min-w-0 flex-1 items-center gap-2">
-              {options.map((opt) => {
-                const isRec = item.recommend === opt.key;
-                const isSel = selected === opt.key;
-                return (
-                  <button
-                    key={opt.key}
-                    onClick={() => onSelect(opt.key)}
-                    disabled={disabled}
-                    aria-pressed={isSel}
-                    className={cx(
-                      "h-11 shrink-0 whitespace-nowrap rounded-md border px-3 text-sm font-medium",
-                      "transition-[background-color,border-color,color] duration-150 active:scale-[0.98]",
-                      isSel
-                        ? "border-accent bg-accent text-accent-fg shadow-sm"
-                        : isRec
-                          ? "border-accent/60 bg-accent-weak text-accent"
-                          : "border-border bg-surface text-heading hover:bg-hover",
-                    )}
-                  >
-                    {isRec && !isSel && (
-                      <span
-                        aria-hidden
-                        className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
-                      />
-                    )}
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
+          {onPark && (
+            <button
+              onClick={onPark}
+              title="Keeps it open and tells the agent nothing. Answer it at a keyboard."
+              className="flex h-11 min-w-0 shrink items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-muted transition-colors hover:bg-hover hover:text-heading"
+            >
+              <MonitorSmartphone className="w-4 h-4 shrink-0" aria-hidden />
+              <span className="truncate">Park it</span>
+            </button>
           )}
+
+          <div className="min-w-0 flex-1" aria-hidden />
 
           <Button
             variant="primary"
             size="lg"
             className="shrink-0"
-            disabled={!canSend || disabled}
+            disabled={sendable === null || disabled}
             loading={submitting}
             onClick={onSubmit}
           >

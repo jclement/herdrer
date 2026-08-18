@@ -1,17 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { CheckCircle2, GitBranch, Hourglass, MessageSquare, Terminal } from "lucide-react";
+import { CheckCircle2, GitBranch, MessageSquare, Terminal } from "lucide-react";
 import type { ReviewItem } from "../../lib/types";
-import { expiringSoon, markdownPreview, shortAge } from "../../lib/format";
+import { markdownPreview, shortAge } from "../../lib/format";
 import { isProvisional } from "../../lib/inbox";
 import { Chip, cx } from "../../components/ui";
-
-const KIND_LABEL: Record<string, string> = {
-  confirm: "confirm",
-  choice: "choice",
-  ack: "ack",
-  manual: "manual",
-  review: "review",
-};
+import { Timing } from "./Timing";
 
 /**
  * One row of the list.
@@ -67,29 +60,38 @@ export function InboxRow({ item, now }: { item: ReviewItem; now: number }) {
           <div className="mt-0.5 text-[11px] text-muted">unstructured · TUI prompt</div>
         )}
 
-        <div className="scroll-x no-scrollbar mt-1.5 flex items-center gap-1 text-muted">
-          {blocking && <Chip tone="danger">blocking</Chip>}
-          {!provisional && <Chip>{KIND_LABEL[item.kind] ?? item.kind}</Chip>}
+        {/*
+          Wraps; it used to be a suppressed-scrollbar horizontal scroller, which
+          on a phone amputated the branch chip mid-word and read as a layout
+          fault. The `choice` / `ack` / `confirm` chip is gone — API vocabulary,
+          not the reader's — and `blocking` is the left rail, which is read at
+          arm's length before any word is.
+        */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-muted">
           {ctx.worker && <Chip title="worker">{ctx.worker}</Chip>}
           {ctx.repo && (
-            <Chip title="repo">
-              <GitBranch className="w-3 h-3" />
-              {ctx.branch ? `${ctx.repo}@${ctx.branch}` : ctx.repo}
-            </Chip>
-          )}
-          {expiringSoon(item.expires_at, now) && !answered && (
-            <Chip tone="warn">
-              <Hourglass className="w-3 h-3" />
-              expiring
+            <Chip title="repo" className="max-w-full">
+              <GitBranch className="w-3 h-3 shrink-0" />
+              <span className="min-w-0 truncate">
+                {ctx.branch ? `${ctx.repo}@${ctx.branch}` : ctx.repo}
+              </span>
             </Chip>
           )}
           {answered && item.answer_value && <Chip tone="ok">answered · {item.answer_value}</Chip>}
+          {/* The same age-and-deadline field the detail head and the desktop
+              rail carry. A queue that shows how old something is and not how
+              long is left is showing the half that does not decide anything. */}
+          {!answered && (
+            <Timing createdAt={item.created_at} expiresAt={item.expires_at} now={now} />
+          )}
         </div>
       </div>
 
-      <div className="shrink-0 pt-0.5 font-mono text-[11px] text-muted tabular-nums">
-        {shortAge(answered ? item.answered_at : item.created_at, now)}
-      </div>
+      {answered && (
+        <div className="shrink-0 pt-0.5 font-mono text-[11px] text-muted tabular-nums">
+          {shortAge(item.answered_at, now)}
+        </div>
+      )}
     </Link>
   );
 }
