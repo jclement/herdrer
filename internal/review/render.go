@@ -104,6 +104,12 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 	n := base64.StdEncoding.EncodeToString(nonce)
 
 	var body strings.Builder
+	hasMermaid := false
+	for _, s := range sections {
+		if s.Kind == "mermaid" {
+			hasMermaid = true
+		}
+	}
 	for _, s := range sections {
 		switch s.Kind {
 		case "mermaid":
@@ -147,7 +153,7 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 <title>` + html2.EscapeString(title) + `</title>
 <style>` + rendererCSS + `</style>
 </head><body>` + body.String() + `
-<script nonce="` + n + `">` + heightScript + `</script>
+<script nonce="` + n + `">` + heightScript + diagramLoader(hasMermaid) + `</script>
 </body></html>`
 	return doc, nil
 }
@@ -174,6 +180,39 @@ const heightScript = `
   post();
 })();
 `
+
+// diagramLoader injects the mermaid bundle, but only when the document actually
+// contains a diagram — it is 3.2 MB, and most review documents have none.
+//
+// Two constraints shape this. The frame is sandboxed without allow-same-origin,
+// so it runs in an opaque origin where `'self'` matches nothing; scripts are
+// admitted by nonce, and `'strict-dynamic'` is what lets this nonced bootstrap
+// inject a further script that the policy then trusts.
+//
+// And it must be a CLASSIC script, never type="module": module scripts are
+// fetched in CORS mode, and an opaque origin sends `Origin: null`, so a module
+// fetch would need CORS headers on the asset that a classic script does not.
+// Anyone "tidying" this into an import will break diagram rendering in a way
+// that only reproduces inside the sandbox.
+func diagramLoader(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return `
+(function(){
+  var s = document.createElement("script");
+  s.src = "/assets/mermaid-frame.js";
+  s.async = false;
+  s.onerror = function(){
+    // Leave the diagram source visible rather than an empty box.
+    document.querySelectorAll("pre.mermaid").forEach(function(p){
+      p.classList.add("mermaid-unrendered");
+    });
+  };
+  document.head.appendChild(s);
+})();
+`
+}
 
 const rendererCSS = `
 :root{--bg:#fff;--fg:#1f2328;--muted:#656d76;--border:#d0d7de;--code-bg:#f6f8fa;

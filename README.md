@@ -31,31 +31,40 @@ exist; this is a third thing trying the merged shape on one box.
 
 **Early, but it runs.** It has never run in production.
 
-The binary builds and the Go test suite passes. `herdrer serve` comes up, `herdrer enroll` prints a
-single-use registration code, the SPA is embedded and served, `/api/v1/health` and
+The binary builds, both test suites pass, and CI is green. `herdrer serve` comes up, `herdrer
+enroll` prints a single-use registration code, the SPA is embedded and served, `/api/v1/health` and
 `/api/v1/auth/state` answer unauthenticated, `/api/v1/bootstrap` 401s, the agent tree and
 `/ws/terminal` refuse credential-less callers, and `/onboard/skill.md` serves the vended agent
-skill. A static `linux/amd64` binary cross-compiles clean at 14 MB with CGO off, and the provision
-and deploy scripts for the Hetzner box are written.
+skill. A static `linux/amd64` binary cross-compiles clean at 18 MB with CGO off, and the provision
+and deploy scripts are written.
 
-The test suite is the part worth pointing at: `internal/api/routes_test.go` tables **all 38
-endpoints** and proves that every non-ceremony route refuses anonymous callers, that an agent token
-is refused on every human route, that a session cookie is refused on every agent route, that
-cross-origin writes are rejected — including from a same-site sibling, the wrong scheme, and an
-absent `Origin` — and that one agent cannot read another agent's item.
+What's worth pointing at:
 
-Still unbuilt, and worth knowing before you rely on any of it:
+- **The route-principal test.** `internal/api/routes_test.go` tables **all 38 endpoints** and proves
+  that every non-ceremony route refuses anonymous callers, that an agent token is refused on every
+  human route, that a session cookie is refused on every agent route, that cross-origin writes are
+  rejected — including from a same-site sibling, the wrong scheme, and an absent `Origin` — and that
+  one agent cannot read another agent's item.
+- **An end-to-end test over real HTTP:** an agent posts a review with a diff, blocks on `?wait=`, a
+  human answers with a note overruling the recommendation, and the blocking call returns carrying
+  both. Plus the expired path, asserting no answer **and no `recommend`**.
+- **Step-up re-authentication.** Opening a terminal needs a fresh passkey assertion within five
+  minutes, and the credential that satisfied it is the one whose terminal permission is checked — so
+  a phone marked review-only stays review-only even while holding a valid session.
+- **A headless VT.** A reattaching client gets a repaint synthesised from real screen state rather
+  than a replay of bytes, which is the difference between resuming a full-screen agent TUI and
+  getting garbage.
 
-- **Mermaid renders as source.** The sandboxed document escapes the diagram source into a `<pre>`;
-  no diagram library is loaded yet. Syntax highlighting is absent too.
-- **No CI.** `mise run check` passes locally, but nothing enforces it, and there is no release
-  pipeline — so `scripts/install.sh`'s signature verification has never actually run against a
-  published release.
-- **No step-up re-authentication.** A live session plus a same-origin ticket mint opens a terminal;
-  there is no fresh-assertion requirement before dangerous actions.
-- **No per-credential terminal permission.** Every passkey is equal, so the phone passkey can open a
-  shell. There is no `can_terminal` flag to make it review-only.
-- No bells or OSC 9 interception, no orphan detection, and no `herdrer doctor` / `backup` / update.
+Still unbuilt or unproven, and worth knowing before relying on any of it:
+
+- **Mermaid diagrams render as their own source.** The bundle is built and embedded and the
+  sandboxed frame's CSP is shaped for it, but the renderer does not yet inject it. Syntax
+  highlighting is absent too.
+- **Nothing has been signed.** The release workflow wires cosign and build provenance, but no `v*`
+  tag has been pushed, so `install.sh`'s verification tiers have never run against a real artifact.
+- **`can_terminal` defaults to on.** The per-credential terminal permission is enforced, but a new
+  passkey may open a shell until someone turns it off.
+- **No bells, no orphan detection, no off-box audit**, and no `herdrer doctor` / `backup` / update.
 
 `DESIGN.md` §0 has the file-by-file snapshot and §11 the full list of honest gaps.
 
@@ -209,7 +218,7 @@ back if health never comes up:
 mise run deploy
 ```
 
-Configuration lives in `deploy/herdrer.service` — `HERDRER_ADDR=127.0.0.1:7799`,
+Configuration lives in `deploy/herdrer.service.template` — `HERDRER_ADDR=127.0.0.1:7799`,
 `HERDRER_TLS_MODE=off`, `HERDRER_DOMAIN=herdrer.example.com`,
 `HERDRER_ORIGIN=https://herdrer.example.com` — with secrets in an optional
 `~/.config/herdrer/herdrer.env`. Note that `HERDRER_ORIGIN` is the `https://` name even though the
@@ -218,7 +227,7 @@ derived from the origin, not the listener.
 
 Two things in those files are load-bearing and look like mistakes if you don't know why:
 
-- **The Caddyfile sets write and read-body timeouts to 0.** Any finite value cuts a 300-second
+- **The Caddyfile template sets write and read-body timeouts to 0.** Any finite value cuts a 300-second
   agent long-poll or a terminal WebSocket mid-flight, and the symptom — a terminal that dies after
   exactly N seconds, or an agent that sees a hang-up instead of `{"status":"open"}` — is the single
   most likely way this deployment breaks. Do not tidy them into real numbers.
@@ -249,7 +258,11 @@ yourself out. Three details from it worth having here:
   warning; a checksum mismatch is fatal with no override. Since there is no release pipeline yet,
   none of that has ever run for real.
 
-There is no self-update, no `herdrer doctor`, no `herdrer backup`, and no CI.
+CI runs `mise run check`, `-race`, a blocking `govulncheck` and an installer smoke test in a real
+`ubuntu:24.04` container on every push and PR; the release workflow is tag-driven and wires
+GoReleaser, cosign and build provenance. No tag has been pushed yet, so none of the signing has
+verified anything for real. There is still no self-update, no `herdrer doctor` and no
+`herdrer backup`.
 
 ## Security, in short
 
@@ -274,6 +287,10 @@ and both the terminal and the control board are shell-equivalent — there is no
 - **WebSocket upgrades need a single-use 60-second ticket** minted by an authenticated same-origin
   POST, on top of the session and the origin check. Cookie-on-upgrade is what owned three shipped
   projects in 2026.
+- **Opening a terminal needs a fresh passkey assertion**, within five minutes, using a credential
+  marked as permitted to open one — and flipping that permission itself requires step-up. The 403 is
+  recoverable, so the user sees one Face ID prompt rather than a lost action. Every ticket issued
+  fires a push notification.
 - **Agent-authored markdown is sanitized server-side and rendered in an opaque-origin sandboxed
   iframe** with `connect-src 'none'`. An agent is a trusted party producing untrusted content, and
   a sanitizer bug should be a rendering glitch rather than a shell.
@@ -295,8 +312,15 @@ and proves both directions of it — no agent token reaches a human route, no se
 an agent route, no route outside the ceremony answers an anonymous caller, and cross-origin writes
 are refused including from a same-site sibling.
 
+Two things to know honestly beyond the list above: **step-up buys back part, not all, of the
+channel binding** that deleting the end-to-end envelope cost — it authenticates an event, not a
+channel, so a cookie stolen inside the five-minute window from a terminal-capable credential still
+reaches a shell. And **`can_terminal` defaults to on**, so the control protects you only once you
+have used it.
+
 `DESIGN.md` §7 has the ranked threat table and §11 the unbuilt controls, which currently include
-step-up re-authentication, per-credential terminal permissions, and off-box audit.
+off-box audit, orphan detection, and a test asserting the iframe sandbox attribute never gains
+`allow-same-origin`.
 
 ## License
 

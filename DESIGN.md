@@ -23,19 +23,20 @@ tree several people are writing in parallel; check the directory before believin
 | Area | State |
 |---|---|
 | `cmd/herdrer` | **Built.** `serve`, `enroll [--label --ttl]`, `token create [--name --scopes --user]`, `version`. |
+| `internal/migrations` | **Built.** `0001_init.sql` is the data model (§4); `0002_stepup.sql` adds step-up and per-credential terminal permission (§6). |
 | `internal/config` | **Built**, with tests. Loads and validates every key in `.env.sample`. |
-| `internal/migrations/0001_init.sql` | **Built.** This file is the data model, not brief 03's proposal (§4). |
 | `internal/store` | **Built.** Auth, tokens, enrollment, ceremonies, audit, review. |
-| `internal/auth` | **Built.** WebAuthn service, sessions, `sk_` tokens, WS tickets. |
-| `internal/api` | **Built**, with the route-principal test (D11). Routes, auth / review / settings / terminal / websocket / skill / static handlers, per-user event bus. |
-| `internal/review` | **Built**, with tests. Item lifecycle, long-poll, and the goldmark → bluemonday sanitizer (D14). |
-| `internal/terminal` | **Built.** Herdr socket client, agent board, detached PTY sessions with a 256 KB scrollback ring. **No headless VT** — §8.2 and §11. |
-| `internal/notify` | **Built.** Direct Web Push over VAPID via `webpush-go`. No relay. |
-| `internal/webui` | **Built.** `//go:embed all:dist`, with a `Present()` check so a binary built before any web build serves a placeholder rather than 404ing. |
-| `deploy/`, `scripts/` | **Built.** `herdrer.service`, `Caddyfile`, `provision.sh`, `deploy.sh`, `install.sh`, and `scripts/README.md` as the runbook. |
-| `web/` | **Built.** Router, shell, inbox, item page with action bar and option cards, diff view, sandboxed document frame, agents board, terminal, settings, login. |
-| Mermaid rendering | **Source-only.** The sandboxed document emits `<pre class="mermaid">` with the source escaped; no diagram library is loaded, so a diagram reads as its source today (§11). |
-| Bells / OSC 9 interception, step-up re-auth, `can_terminal`, Siri voice tokens, CI | **Not built.** |
+| `internal/auth` | **Built.** WebAuthn, sessions, `sk_` tokens, WS tickets, and the step-up ceremony with a 5-minute window. |
+| `internal/api` | **Built**, with the route-principal test and an end-to-end test (D11). |
+| `internal/review` | **Built**, with tests. Item lifecycle, long-poll, goldmark → bluemonday sanitizer (D14). |
+| `internal/terminal` | **Built**, with tests. Herdr socket client, agent board, PTY sessions, and a **headless VT** that synthesises a repaint on attach (§8.2). |
+| `internal/notify` | **Built.** Direct Web Push over VAPID. No relay. |
+| `internal/webui` | **Built.** `//go:embed all:dist`, with `Present()` so a binary built before any web build serves a placeholder rather than 404ing. |
+| `web/` | **Built.** Router, shell, inbox, item page, diff view, sandboxed document frame, agents board, terminal, settings, login, step-up recovery. |
+| `deploy/`, `scripts/` | **Built.** Unit and Caddyfile templates, `provision.sh`, `deploy.sh`, `install.sh`, and `scripts/README.md` as the runbook. |
+| `.github/`, `.goreleaser.yml` | **Built.** CI on push and PR, a tag-driven release workflow, dependabot, and an installer smoke test in a real `ubuntu:24.04` container (§10.5). |
+| **Mermaid rendering** | **Built but not wired.** The bundle exists and is embedded; `render.go` does not yet inject it, so diagrams still render as source. See §11. |
+| Bells / OSC 9 → push, orphan detection, off-box audit | **Not built.** |
 
 Smoke-verified on a real run: `enroll` prints a single-use code; `/api/v1/health` and
 `/api/v1/auth/state` answer unauthenticated; `/api/v1/bootstrap` 401s; the agent tree and
@@ -116,9 +117,9 @@ herdrer/
 ├── docs/API.md                  the pinned HTTP + WebSocket contract. Changing a route means
 │                                changing this file in the same commit
 ├── deploy/
-│   ├── herdrer.service          the systemd *user* unit — configuration and the hardening
+│   ├── herdrer.service.template the systemd *user* unit — configuration and the hardening
 │   │                            list, with the reason each omitted directive is omitted
-│   └── Caddyfile                the public edge. Unlimited write/read-body timeouts on
+│   └── Caddyfile.template       the public edge. Unlimited write/read-body timeouts on
 │                                purpose: any finite one cuts a 300s long-poll or a terminal
 ├── scripts/
 │   ├── README.md                the runbook: fresh box, deploy, roll back, lock-out recovery
@@ -136,8 +137,10 @@ herdrer/
 │   │                            autocert for a loopback domain, origin/domain mismatch)
 │   ├── migrations/
 │   │   ├── embed.go             //go:embed *.sql
-│   │   └── 0001_init.sql        THE data model. Applied lexically on startup, never edited
-│   │                            after shipping
+│   │   ├── 0001_init.sql        THE data model. Applied lexically on startup, never edited
+│   │   │                        after shipping
+│   │   └── 0002_stepup.sql      credentials.can_terminal, sessions.stepped_up_at/_cred — the
+│   │                            columns that buy back channel binding (§6)
 │   ├── store/                   all SQL. store.go opens WAL+busy_timeout+foreign_keys with a
 │   │   ├── store.go             single connection; auth.go, token.go, ceremony.go, enroll.go,
 │   │   └── …                    audit.go hold the queries. ErrNotFound is the only "absent"
@@ -166,15 +169,27 @@ herdrer/
 │   ├── terminal/
 │   │   ├── service.go           Herdr socket client and the agent board. Everything in this
 │   │   │                        package is shell-equivalent
-│   │   └── pty.go               PTY sessions owned by the *server*, not by a websocket, with
-│   │                            a 256 KB scrollback ring so a phone repaints on reconnect
+│   │   ├── pty.go               PTY sessions owned by the *server*, not by a websocket, so a
+│   │   │                        locked phone does not kill the shell
+│   │   └── vt.go                the headless emulator. Attach() returns a synthesised repaint
+│   │                            rather than a replay — "a byte ring cannot repaint a screen" 
 │   ├── notify/service.go        Web Push over VAPID, direct. No relay
 │   └── webui/embed.go           //go:embed all:dist, plus Present() so a binary built with no
 │                                SPA serves a placeholder instead of 404ing every path
-├── web/                         React + Tailwind SPA, built by bun into internal/webui/dist.
-│   └── src/features/            review (inbox, item, diff, action bar, sandboxed document
-│                                frame), agents (board, terminal), settings, auth
-└── .github/workflows/           [empty] no CI yet
+├── web/                         React + Tailwind SPA, built by bun into internal/webui/dist
+│   ├── src/features/            review (inbox, item, diff, action bar, sandboxed document
+│   │                            frame), agents (board, terminal), settings, auth
+│   ├── src/lib/stepup.ts        recovers from 403 STEP_UP_REQUIRED without losing the action
+│   ├── src/frame/               the mermaid bundle for the sandboxed frame. Built SEPARATELY
+│   │                            by vite.frame.config.ts as one classic IIFE (D14)
+│   └── vite.frame.config.ts     why that second build exists, in its header comment
+├── .goreleaser.yml              CGO off, cosign signing, the Homebrew cask, no container
+│                                image (a container cannot hold the host's herdr socket)
+└── .github/
+    ├── workflows/ci.yml         mise run check, then -race and govulncheck, then the
+    │                            installer smoke test. Actions pinned by SHA
+    ├── workflows/release.yml    tag-driven: GoReleaser + cosign + build provenance
+    └── scripts/                 installer-smoke.sh, assert-spa-embedded.sh
 ```
 
 ---
@@ -221,10 +236,11 @@ This is a decision taken **against** brief 02 §1.2, which recommended a dedicat
 in as many words "do not put herdrer on `example.com`". Jeff chose the shared domain anyway,
 with the reasoning understood.
 
-What it costs: `SameSite` is **site**-scoped, not origin-scoped. Any other service deployed on
-the same registrable domain — a sibling subdomain — is therefore *same-site* with herdrer. An XSS on any of them becomes a candidate launch point for cross-site WebSocket
-hijacking against a terminal that is a shell — which is the exact shape of Dozzle CVE-2026-44985,
-Mailpit CVE-2026-22689 and nginx-ui CVE-2026-34403, all in 2026.
+What it costs: `SameSite` is **site**-scoped, not origin-scoped. Any other service deployed on the
+same registrable domain — a sibling subdomain — is therefore *same-site* with herdrer, and an XSS on
+any of them becomes a candidate launch point for cross-site WebSocket hijacking against a terminal
+that is a shell. That is the exact shape of Dozzle CVE-2026-44985, Mailpit CVE-2026-22689 and
+nginx-ui CVE-2026-34403, all in 2026.
 
 What compensates, and none of it is free:
 
@@ -404,6 +420,27 @@ exfiltrate. Mermaid and the highlighter live only in that bundle and never execu
 frame can remove its own sandbox attribute); that pair must be banned by a test.
 *Cost:* text selection, find-in-page and deep links inside the body get slightly worse. That is
 the price, and the alternative is that an XSS in a markdown renderer is a shell.
+
+**Two consequences of the opaque origin that look like mistakes and are not.** Both are the kind of
+thing someone tidies and breaks silently, so they are recorded here as well as in the code:
+
+1. **`'self'` matches nothing in an opaque origin.** So the document's CSP admits its own bootstrap
+   by `'nonce-…'` plus `'strict-dynamic'`, which are origin-independent, and denies everything else
+   — `default-src 'none'`, `connect-src 'none'`.
+2. **The diagram bundle must be a *classic* script, never `type="module"`.** Module scripts are
+   fetched in CORS mode, and an opaque origin sends `Origin: null`, so a module would need
+   `Access-Control-Allow-Origin` on every chunk it pulled; a classic script is a no-cors request and
+   needs nothing. That is also why `web/vite.frame.config.ts` is a **second, separate build** rather
+   than a second input of the main one: mermaid lazily `import()`s a chunk per diagram type, a
+   multi-input build emits those as separate hashed modules fetched at runtime, and `build.lib` with
+   the `iife` format inlines them into one file instead. The bundle is large *because* of that, and
+   the size is the price of the isolation.
+
+Supporting that, a missing `/assets/*.js` returns **404, not the app shell**. Serving `index.html`
+with a 200 for a missing bundle makes the browser parse HTML as JavaScript and report
+`Unexpected token '<'` — from inside an opaque-origin frame, which is close to undiagnosable.
+`TestMissingAssetIs404NotTheAppShell` guards it, and `TestClientRoutesStillFallThrough` guards the
+other half, since a deep link from a push notification must still reach the shell.
 
 **D15 — WebSocket auth is a ticket, not the ambient cookie.**
 Cookie-on-upgrade is what all three 2026 CVEs exploited. The SPA `POST`s to
@@ -683,22 +720,42 @@ deployment makes possible. Its content is meatprompt's shipped skill plus:
 | WS ticket | 32 bytes, single-use, **60 s**, bound to session + purpose | D15 |
 | Rate limits | login 30/min burst 10; enrollment 6/min burst 3; agent 600/min burst 60, per IP | WebAuthn is not brute-forceable, so this is DoS and noise reduction, not lockout. **No account lockout** — on a single-user app, lockout is a self-DoS primitive an attacker can trigger from anywhere |
 
-### What is deliberately *not* in the auth model yet
+### Step-up re-authentication — buying back channel binding
 
-Both are named honestly rather than implied:
+D7 named the real cost of deleting herdr-web's end-to-end envelope: **channel binding.** Per-device
+X25519 keys made possession of the channel continuous proof of possession of the device; a session
+cookie is a bearer credential, and a stolen one is a stolen session. `0002_stepup.sql` buys that
+property back at the one place it is worth the friction.
 
-- **No step-up.** Brief 02 §2.4 wanted `last_uv_at` on the session and a fresh assertion within 15
-  minutes before opening any socket, enrolling a credential, or minting a token. The `sessions`
-  table has no such column. Today a live session cookie plus a same-origin ticket mint is
-  sufficient to open a terminal.
-- **No `can_terminal` credential class.** Brief 02 §1.3 wanted the phone passkey to be review-only
-  by default, so a stolen unlocked phone reaches the inbox and not a shell. The `credentials`
-  table has no such column. Today every credential is equal.
+| Mechanism | Detail |
+|---|---|
+| `sessions.stepped_up_at` / `stepped_up_cred` | When this session last completed a fresh assertion, and with which credential. NULL — the state every session starts in — means never |
+| `credentials.can_terminal` | Whether a passkey may open a terminal. Defaults to 1 so the bootstrap device works immediately; a phone is flipped to 0 in settings |
+| `auth.StepUpWindow` | 5 minutes. `POST /api/v1/terminal/ticket` refuses outside it |
+| `POST /api/v1/auth/stepup/{begin,finish}` | The re-assertion ceremony. A real biometric or PIN, seconds ago |
+| `POST /api/v1/credentials/{id}/terminal` | Flipping the flag **itself requires step-up**, so a stolen cookie cannot grant itself terminal rights |
 
-Together these are the two controls that were buying back what channel binding used to give for
-free (D7). Their absence is the largest gap between the design and the code, and it is in §11.
+Two details are load-bearing and easy to get wrong in the other direction:
 
----
+1. **The credential that satisfied the step-up is the one whose `can_terminal` is checked** — not
+   whichever key created the session. Otherwise a phone marked review-only would still open a shell
+   by riding a session that a laptop passkey had started. `handlers_terminal.go` checks
+   `sess.SteppedUpCred`, and that is the whole point of storing which credential it was.
+2. **The 403 is recoverable, not fatal.** It carries `STEP_UP_REQUIRED`, and `web/src/lib/stepup.ts`
+   teaches the API client to run the ceremony and retry the original call, so the user experiences
+   one Face ID prompt rather than an error. A step-up that loses the action you were taking is a
+   step-up people route around.
+
+What this does and does not restore: a stolen cookie now reaches the **review inbox** — diffs, repo
+internals, the ability to answer questions and therefore steer agents — but **not a shell**, unless
+it is stolen from a browser that completed an assertion in the last five minutes *and* used a
+credential permitted to open one. That is materially better than a bearer token and materially worse
+than a bound channel, because it authenticates an event rather than a channel. Device Bound Session
+Credentials remain the thing to adopt when browser support arrives.
+
+Every terminal ticket also fires a push notification. He opens a terminal rarely, so the
+false-positive rate is near zero and the signal near perfect — this is the cheapest detection
+control in the design.
 
 ## 7. Threat table
 
@@ -711,11 +768,11 @@ and everything it can reach.
 | 2 | **XSS via agent-authored markdown/mermaid → session → shell** (the agent is trusted; its content is not) | Medium-High — mermaid has a live CVE record and agents ingest hostile text daily | 5 | goldmark raw-HTML-off → bluemonday server-side → `allow-scripts` **without** `allow-same-origin` iframe → `connect-src 'none'` inside it → renderer deps never run top-level | A browser bug in the sandbox itself. Also: content he *believes* because it looks like his agent said it — a social vector no sanitizer touches |
 | 3 | **Prompt injection → a plausible question whose "obviously correct" answer is harmful** | High | 3–4 | Tasks are human-write-only (D13); a claimed task is a request, not an authorisation; `recommend` mandatory surfaces questions the agent should have answered itself; the context strip makes provenance visible | Real and unmitigated at the technical layer. This is a judgement problem |
 | 4 | **First-run enrollment race** — a scanner registers before he does | High if bootstrap is naive | 5 | No open registration endpoint, ever. Permit minted only by a local shell, hashed, single-use, 15-minute TTL, consumed in the credential transaction (D9) | Effectively none |
-| 5 | **Stolen session cookie** (compromised laptop, extension, cookie in a log) | Medium | 5 | Hashed server-side sessions, instant revocation, exact-origin checks, per-connection tickets | **High, because step-up and `can_terminal` are not built** (§6). A stolen cookie today reaches a shell. This is the residual cost of deleting channel binding (D7) and it is currently unpaid |
+| 5 | **Stolen session cookie** (compromised laptop, extension, cookie in a log) | Medium | 3–5 | Hashed server-side sessions, instant revocation, exact-origin checks, per-connection tickets, **step-up assertion within 5 min before any terminal ticket**, `can_terminal` on the stepping-up credential, push on every ticket (§6) | A cookie stolen from a browser that asserted within the last 5 minutes, using a credential with `can_terminal`, still reaches a shell — the residual cost of deleting channel binding (D7). Outside that window it reaches the review inbox, which is diffs and the ability to steer agents. Non-trivial, and bounded |
 | 6 | **Bot token leak** (agent logs it, worktree committed, CI artefact) | High — tokens in agent environments leak constantly | 2 | Separate route tree so a token reaches no shell path *by construction*; four scopes, no terminal scope; hashed storage; optional expiry; `routes_test.go` proving a token is refused on every human route and cannot read another agent's item | A leaked token reads that agent's own items (which contain diffs) and can spam questions. Annoying, not fatal |
 | 7 | **Malicious npm dependency in the SPA** | Medium | 5 → 2 | Renderer deps execute only inside the opaque-origin iframe with `connect-src 'none'`; the top-level bundle stays React + router + query | A malicious dep in the *top-level* bundle is still fatal. Keep that set small and boring |
 | 8 | **Compromise of the herdrer process itself** | Low-Medium | 5 | Caddy absorbs TLS/HTTP parsing; the process is Go and small; `NoNewPrivileges` in the unit | Total. **D1 rejected the two-unit split**, so there is no containment boundary here at all when the terminal is on |
-| 9 | **Stolen unlocked phone with a live session** | Low-Medium | 5 | Instant revoke from the CLI or another device; sessions listed in Settings | **5, not 3** — without `can_terminal` the phone is a shell. With it, this drops to "reads diffs and steers agents", which is still non-trivial |
+| 9 | **Stolen unlocked phone with a live session** | Low-Medium | 3 | The phone's credential is set `can_terminal = 0`, so it reaches the inbox and not a shell; opening a terminal needs a fresh assertion anyway; instant revoke from the CLI or another device | Reads review items (diffs, repo internals) and can answer questions — i.e. steer agents. Non-trivial. Revoke fast. Note the default is `can_terminal = 1`, so this depends on the flag actually being flipped |
 | 10 | **Mis-issued certificate + network position (MITM)** | Low | 5 | TLS 1.3, HSTS preload via Caddy, CAA pinning the issuer, CT monitoring | Accepted. Was mitigated by herdr-web's E2E; is not now (D7) |
 | 11 | **CSRF on a state-changing route** | Low-Medium (an easy miss) | 3–5 | Router-level `Origin` enforcement in `requireSameOrigin`, mounted **outside** the mux so it cannot be forgotten per-handler; missing `Origin` = reject; `SameSite=Strict` as layer two | A route registered outside the wrapped handler — which `routes_test.go` catches, since it exercises every endpoint through the assembled handler and asserts a same-site-sibling `Origin` is refused |
 | 12 | **SSRF into the tailnet or Hetzner metadata (`169.254.169.254`, `100.64.0.0/10`)** | Low — nothing fetches URLs today | 4–5 | **Design intent: herdrer fetches no URL, ever.** `links[]` render as links and are never dereferenced. No previews, no unfurl, no remote images (`img-src` has no remote host) | Rises sharply the day someone adds a link preview. If one is ever added: exact-host allowlist, resolve-then-dial-the-IP, and a deny list that includes the tailnet |
@@ -758,29 +815,54 @@ Binary frames, first byte is the lane:
 Auth on upgrade: valid session **and** exact `Origin` **and** a valid unused ticket of purpose
 `terminal`. Bearer refused unconditionally.
 
-**The mirror outlives the websocket, and that half is built.** A phone locks its screen, iOS
-suspends the tab, and the socket dies within ~30 s. If the PTY dies with it, every unlock costs a
-new process, a full repaint, and the loss of scrollback — which is unusable. So `terminal/pty.go`
-makes the session a server-owned object rather than something the websocket owns, and keeps a
-**256 KB scrollback ring** so a reconnecting phone repaints immediately.
+**The mirror outlives the websocket, and it repaints from a real emulator.** A phone locks its
+screen, iOS suspends the tab, and the socket dies within ~30 s. If the PTY dies with it, every
+unlock costs a new process, a full repaint, and the loss of scrollback — which is unusable. So
+`terminal/pty.go` makes the session a server-owned object rather than something the websocket owns,
+and `terminal/vt.go` feeds every byte the PTY produces into a headless emulator alongside the live
+subscribers.
 
-**The headless VT is not built, and that is a real gap.** Brief 01 argued for feeding every
-mirror's bytes through a VT emulator at the mirror's geometry, because it earns its keep three
-times over:
+**Why an emulator and not a byte ring.** A ring was the first implementation and it is gone. The
+reason is in `vt.go`'s header and is worth repeating: *a byte ring cannot repaint a screen.*
+Replaying an arbitrary window of a stream that is mostly cursor addressing drops the client
+mid-escape-sequence, with no idea whether the alt screen is active, where the cursor is, what the
+scroll region is, or what attributes are in force. For a scrolling shell that is untidy; for the
+full-screen TUI of a coding agent — the thing herdrer exists to watch — it is garbage. Live
+subscribers still get the raw stream, because xterm.js is a real terminal and handles it correctly
+as long as it has been attached the whole time. Only the repaint-on-attach has to be synthesised.
 
-- **Resume.** With a ring you can replay bytes. But replaying a *prefix* of an alt-screen byte
-  stream into a fresh xterm.js produces garbage — you can land mid-alt-screen, mid-CSI, with the
-  wrong scroll region. A VT lets the server synthesise a correct full repaint from current state at
-  any moment, which is the only resume that is always right.
-- **Backpressure recovery.** The organising rule is that **the terminal lane is loss-tolerant by
-  construction and the control lane never is**: terminal bytes may be coalesced or discarded
-  *wholesale* precisely because a screen can be resynthesised. Without a VT, "I fell behind" has no
-  cheap exact recovery — you either buffer forever or show a corrupt screen.
-- **Bell detection.** OSC 9 interception (§9.4) needs something parsing OSC, and the VT is the
-  thing that would already be doing it.
+`Attach()`'s signature did not change when this landed; its second return value is now a synthesised
+repaint instead of a ring snapshot. The repaint emits alt-screen state in both directions, an
+SGR/margin/origin/autowrap reset, the painted body, mode restoration, DECSTBM, an origin-adjusted
+cursor position, cursor visibility and shape, and the title. Scrollback comes from VT state, capped
+at 200 lines.
 
-The ring covers the common case (reconnect within the window). The uncommon cases — a long sleep,
-a repaint storm on bad LTE — are where it will show.
+**Library: `github.com/charmbracelet/x/vt`,** chosen over `hinshun/vt10x` (last touched 2022, and its
+grid readback exposes neither alt-screen state nor per-cell attributes in a re-serialisable form) and
+over the termtest/xpty family (which wraps vt10x and adds a PTY layer this package already has).
+The requirement is readback: a VT you cannot serialise is of no use for a repaint. x/vt keeps both
+screen buffers with a real scroll region and exposes `CellAt`, `IsAltScreen`, `CursorPosition`,
+`Scrollback`, and a `Style.Diff` that emits the SGR to move from one cell's attributes to the next.
+
+**What a repaint does not restore**, stated rather than buried: character-set designations (SCS),
+custom tab stops, the saved cursor (DECSC), OSC-set palette entries, per-cell hyperlinks, and the
+application's current SGR pen. The pen is the notable one — the library has no getter, so a repaint
+leaves attributes reset and an application holding a non-default pen renders its next output with
+default attributes until it emits SGR again. Full-screen TUIs set attributes per run and are
+unaffected; a shell's echo of typed characters is unstyled anyway.
+
+**What it costs in memory**, also stated rather than buried: roughly **4 MB of every session is
+`ansi.Parser`'s fixed 4 MiB DCS/OSC buffer**, allocated eagerly with no knob to turn it down.
+Measured heap is 4.5 MB at 80×24 and 11.28 MB at 200×50 with full history — though RSS was 7.59 MB
+where heap said 11.28, so much of it never faults in. At the cap of 4 sessions per user that is
+~20–32 MB worst case, which is acceptable on this box and would not be on a smaller one. The lever
+is upstream: a PR exposing `SetDataSize` would cut it to ~2–7 MB.
+
+The emulator earns its keep twice more. **Backpressure recovery**: the organising rule is that the
+terminal lane is loss-tolerant by construction and the control lane never is — terminal bytes may be
+coalesced or discarded *wholesale* precisely because a screen can be resynthesised, and without an
+emulator "I fell behind" has no cheap exact recovery. **Bell detection**: see §9.4, with the caveat
+there about which hook actually applies.
 
 Measured budget from the protocol-19 probe, which is what makes "open it at a bus stop" real: cold
 attach at phone geometry is 19.4 KB uncompressed (~2 KB deflated), a resume within the ring is a
@@ -923,9 +1005,14 @@ and OSC 9 as the **corroborating text**; if only one arrives, use it alone.
 Debounce per agent at 60 s so a flapping `blocked → working → blocked` buzzes once, and set the
 push `tag` to the agent name so the OS replaces rather than stacks.
 
-*Not built.* `internal/notify` can send a push; nothing yet decides when one is warranted. OSC 9
-interception in particular is blocked on the headless VT (§8.2), since there is currently nothing
-in the byte path parsing OSC.
+*Not built, and one nuance is worth getting right rather than repeating.* The headless VT (§8.2)
+means there is now something in the byte path parsing escape sequences, so this is a small addition
+rather than a blocked one — but **`vt.Callbacks.Bell` is not the hook.** That callback fires on the
+BEL character, and finding E13 is that **Herdr never emits one**. OSC 9 is a different sequence, and
+x/vt neither dispatches it nor offers a catch-all OSC callback (it has `Title`, `IconName` and
+`WorkingDirectory`, i.e. OSC 0/2/7, and nothing else). So the OSC 9 chain needs its own handling —
+a tee through `ansi.Parser` on the way to the emulator. Cheap, but not free, and not already done.
+`internal/notify` can send a push; nothing yet decides that a bell warrants one.
 
 ---
 
@@ -1019,10 +1106,34 @@ wants cosign it prints the command); and it never edits a shell rc file or start
 starting something that will mint an enrollment token is a decision, not a side effect. Verification
 degrades in three tiers — cosign bundle, else `gh attestation verify`, else a sha256 against
 `checksums.txt` with a loud warning — with `HERDRER_REQUIRE_SIGNATURE=1` to make the last one fatal.
-**A checksum mismatch is fatal always, with no override.** See limitation 14 for why none of this
-has ever executed.
+**A checksum mismatch is fatal always, with no override.**
 
-### 10.5 State, backup and migrations
+### 10.5 CI, and what it does not prove
+
+`.github/workflows/ci.yml` runs on push and PR and **drives the repo's own mise tasks rather than
+reimplementing them** — where it runs a raw tool it is because the contract deliberately does not
+cover it, and the comment says which. On top of `mise run check` it adds `go test -race` with
+`CGO_ENABLED=1` (release builds are CGO off; the race detector is the only thing that needs cgo,
+which is painless because `modernc.org/sqlite` is pure Go), a **blocking** `govulncheck`, an
+`assert-spa-embedded.sh` guard on the `//go:embed` hook — because `//go:embed all:` errors on a
+*missing* directory but happily embeds an *empty* one, and a binary that serves a blank page is the
+kind of release you notice from a train — and a genuine installer smoke test that runs `install.sh`
+inside `ubuntu:24.04`. Installer bugs are only ever found on a bare box, so CI is the bare box.
+Actions are pinned by commit SHA, and no job in `ci.yml` has access to a secret.
+
+`release.yml` is tag-driven and adds GoReleaser, keyless cosign, and `attest-build-provenance` with
+`subject-checksums: dist/checksums.txt`, which attests every file listed in the checksums file in
+one step and is what makes `install.sh`'s `gh attestation verify` tier real.
+
+**What none of that proves yet:** no `v*` tag has been pushed, so no release artifact exists, and
+neither signing tier has ever verified anything (limitation 13).
+
+One CI-shaped bug worth recording because it cost time and would have cost more on the box: the
+mise tasks used `set -euo pipefail` under `/bin/sh`. That is bash-only syntax; `/bin/sh` is dash on
+Ubuntu, so the tasks worked on macOS and died on CI. They now carry an explicit
+`#!/usr/bin/env bash`.
+
+### 10.6 State, backup and migrations
 
 Everything precious is under `HERDRER_STATE_DIR` (0700):
 
@@ -1050,29 +1161,28 @@ bites, because you roll the binary back and forget the DB moved forward.
 
 Ordered roughly by how much they should bother you.
 
-1. **It runs, but it has never run in production.** The binary builds, `mise run check` passes on
-   the Go side, and the flows in §0 are smoke-verified locally. Nothing here has faced a real
-   browser on a real phone against the real box, and the list below is what is known to be absent
-   rather than what a week of use would find.
-2. **`herdrer.example.com` shares a registrable domain with `meatprompt.`, `keep.` and
-   ``.** Those siblings are **same-site**, which is the precondition
-   for the CSWSH class of bug that owned three shipped projects in 2026. The compensations are real
-   and listed in D3 — `__Host-`, `SameSite=Strict`, exact-origin checks on every state-changing
-   request *and* on the upgrade, single-use 60-second non-ambient tickets — but they are
-   compensations, not equivalence. A dedicated eTLD+1 would have made "same site" and "same origin"
-   the same set and removed the class. **This is an accepted risk, chosen deliberately with the
-   argument understood.**
-3. **No step-up re-authentication, and no `can_terminal` credential class.** A live session cookie
-   plus a same-origin ticket mint opens a shell. There is no fresh-assertion requirement before
-   dangerous actions and no way to make the phone passkey review-only. These are the two controls
-   that were buying back what channel binding gave for free (D7), and they are the largest gap
-   between this document and the code.
-4. **The Go tests are strong; the web side has none.** D11's table test covers the server
-   thoroughly (38 routes, both directions of tree disjointness, IDOR, same-site-sibling CSRF), and
-   the renderer's CSP is asserted in Go. But nothing asserts the *client* half of D14 — that
-   `DocumentFrame.tsx` never grows `allow-same-origin` beside its `allow-scripts`, which is the one
-   edit that silently converts the sandbox into no sandbox at all. That belongs in a Vitest
-   assertion or a grep in CI, and CI does not exist (limitation 13).
+1. **It runs, but it has never run in production.** The binary builds, both test suites pass, CI is
+   green, and the flows in §0 are smoke-verified locally. Nothing here has faced a real browser on a
+   real phone against a real box — no passkey has been registered against a public origin, no push
+   has been delivered to an installed PWA, and no agent has long-polled across a proxy. The list
+   below is what is known to be absent, not what a week of use would find.
+2. **herdrer shares a registrable domain with other deployed services.** Those sibling subdomains
+   are **same-site**, which is the precondition for the CSWSH class of bug that owned three shipped
+   projects in 2026. The compensations are real and listed in D3 — `__Host-`, `SameSite=Strict`,
+   exact-origin checks on every state-changing request *and* on the upgrade, single-use 60-second
+   non-ambient tickets — but they are compensations, not equivalence. A dedicated eTLD+1 would have
+   made "same site" and "same origin" the same set and removed the class outright. **This is an
+   accepted risk, chosen deliberately with the argument understood.**
+3. **`can_terminal` defaults to 1.** The column exists and is enforced (§6), but a newly enrolled
+   credential may open a shell until someone flips it. Brief 02 argued the phone should default to
+   review-only; the default went the other way so the bootstrap device works immediately, which
+   means the control only protects you once it has been used. Settings should nag about this and
+   does not.
+4. **Nothing asserts the sandbox attribute itself.** The Go side proves the rendered document's CSP
+   is locked down, and the SPA suite covers step-up recovery and diff parsing — but no test fails if
+   `DocumentFrame.tsx` grows `allow-same-origin` beside its `allow-scripts`, which is the single edit
+   that silently converts the sandbox into no sandbox at all (D14). That wants a Vitest assertion or
+   a CI grep, and it is cheap.
 5. **`SUPPRESS_AUTH` ships in the release binary** (D18). `config.validate()` refuses to start it
    alongside a non-loopback listener or origin, which is a real refusal — but a `//go:build dev`
    tag would mean the bypass does not exist at all, and on this app the flag leaks his laptop
@@ -1105,35 +1215,38 @@ Ordered roughly by how much they should bother you.
     recorded process start time turns a heuristic into a fact. That is the single strongest argument
     for putting the two halves in one binary, and it is unbuilt. Today expiry is the only backstop —
     which is exactly the limitation meatprompt listed as its top open item.
-13. **No CI.** `.github/workflows/` is empty. `mise run check` passes locally, but nothing
-    *enforces* it, and the gates that
-    should block a tag — `go test -race`, `govulncheck` as a **blocking** gate (this binary
-    terminates on the public internet and hands out shells), migration tests that run forward from a
-    real prior state rather than from empty, and an assertion that `web/dist/index.html` exists and
-    is over a floor size (`//go:embed all:` errors on a *missing* directory but happily embeds an
-    *empty* one, and a binary that serves a blank page is the kind of release you only notice from a
-    train) — do not exist.
-14. **`install.sh` describes a release pipeline that does not exist.** The installer is written and
-    is careful — three verification tiers, a checksum mismatch that is fatal with no override — but
-    it resolves releases from a GitHub repo that publishes none, so **no tier has ever run**. There
-    is no cosign bundle and no artifact attestation to verify, because there is no release
-    workflow (limitation 13). Also missing: `herdrer doctor`, `herdrer backup`, `herdrer db
-    restore` (which `scripts/README.md` tells you to run after a failed rollback), self-update, and
-    `POST /api/v1/admin/update` — which `deploy/herdrer.service` cites as the reason for
-    `Restart=always` and which is not in `routes.go`.
-15. **No headless VT in the terminal lane** (§8.2). Resume is a byte-ring replay, so a client that
-    falls outside the ring, or a repaint storm that overflows the send queue, has no exact recovery.
-    It also blocks OSC 9 bell interception (§9.4) outright.
+13. **The signing tiers have never executed.** CI runs `mise run check`, `-race` with
+    `CGO_ENABLED=1`, blocking `govulncheck`, an installer smoke test in a real `ubuntu:24.04`
+    container, and an embed guard — with actions pinned by SHA. The release workflow wires GoReleaser,
+    keyless cosign and `attest-build-provenance` with `subject-checksums`. **But no `v*` tag has been
+    pushed**, so no release exists, and therefore neither `install.sh`'s cosign tier nor its
+    `gh attestation verify` tier has ever run against a real artifact. Do not read "the signing is
+    wired" as "the signing works" until a tag proves it.
+14. **Operational verbs are still missing.** No `herdrer doctor`, no `herdrer backup`, no
+    `herdrer db restore` — which `scripts/README.md` nonetheless tells you to run after a failed
+    rollback — no self-update, and no `POST /api/v1/admin/update`, which `deploy/herdrer.service.template`
+    cites as the reason for `Restart=always`. Deployment is scp-and-restart with an automatic
+    rollback, which is enough for one box and is not a distribution story.
+15. **Each terminal session costs ~4 MB it does not use.** `ansi.Parser` allocates a fixed 4 MiB
+    DCS/OSC buffer eagerly with no knob (§8.2). Measured heap is 4.5 MB at 80×24 and 11.28 MB at
+    200×50 with full history; RSS was 7.59 MB where heap said 11.28, so much never faults in. At 4
+    sessions per user that is ~20–32 MB worst case — fine here, wrong on a smaller box. The fix is
+    upstream: a PR exposing `SetDataSize`. A repaint also does not restore SCS, tab stops, DECSC,
+    OSC palette entries, per-cell hyperlinks, or the application's SGR pen.
 16. **The unit is `Type=exec`, not `Type=notify`.** `systemctl start` therefore returns before
     migrations have run and the listener is bound, so `start && curl /health` races — and you learn
     about a failed migration from a phone at the café rather than from the terminal you are sitting
     at. The unit file says so and names the three lines to change once the binary calls `sd_notify`.
-17. **Mermaid diagrams render as source.** `render.go` emits `<pre class="mermaid">` with the
-    source escaped, and no diagram library is loaded into the sandboxed document — so a `diagram`
-    attachment currently reads as its own text. The isolation design that would make loading one
-    safe (D14: a separate bundle that only ever executes inside the opaque-origin iframe) is in
-    place and unused. Syntax highlighting is likewise absent; diffs are parsed and tinted by
-    `lib/diff.ts` but not grammar-highlighted.
+17. **The mermaid bundle is built, embedded, and never loaded.** `web/src/frame/mermaid-frame.ts`
+    compiles to a stable unhashed `/assets/mermaid-frame.js` — **3.24 MiB raw, ~882 KiB gzipped**,
+    which is most of why the binary is 18 MB rather than 14 — and the frame's CSP is shaped around
+    injecting it (D14). But `render.go`'s document ends with the height-reporting script only: it
+    emits `<pre class="mermaid">` and never injects the bundle, so **diagrams still render as their
+    own source today**, which is the honest degradation the design wanted as a *fallback* rather
+    than as the behaviour. Both halves exist; the bootstrap line connecting them does not. When it
+    lands, the lever on that size — if it ever matters — is registering only the diagram types we
+    accept via `registerExternalDiagrams` against `mermaid.core.mjs`. Syntax highlighting is absent
+    too; diffs are parsed and tinted by `lib/diff.ts` but not grammar-highlighted.
 18. **Platform ceilings that no amount of work removes.** iOS Web Push requires an *installed* PWA,
     and there is no programmatic install — the Add-to-Home-Screen gesture must be taught and nagged.
     WebKit does not render notification action buttons, so approve-from-lock-screen exists only via

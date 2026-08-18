@@ -214,20 +214,10 @@ func (s *Service) FinishRegistration(ctx context.Context, w http.ResponseWriter,
 		return nil, fmt.Errorf("%w: %v", ErrVerification, err)
 	}
 
-	// The permit is spent only now, when a real authenticator has produced a
-	// real credential. Consuming is atomic, so two concurrent registrations
-	// racing on one code cannot both succeed.
-	if err := s.st.ConsumeEnrollment(ctx, blob.EnrollmentCode, userID); err != nil {
-		return nil, ErrEnrollmentRequired
-	}
-
 	now := s.nowFn()
 	if !existing {
 		u = &store.User{ID: userID, Handle: blob.Handle, DisplayName: blob.DisplayName,
 			Role: "admin", CreatedAt: now}
-		if err := s.st.CreateUser(ctx, u); err != nil {
-			return nil, err
-		}
 	}
 
 	transports := make([]string, 0, len(cred.Transport))
@@ -242,8 +232,13 @@ func (s *Service) FinishRegistration(ctx context.Context, w http.ResponseWriter,
 		Transports: strings.Join(transports, ","),
 		Name:       deviceName(r.UserAgent()), CreatedAt: now,
 	}
-	if err := s.st.AddCredential(ctx, sc); err != nil {
-		return nil, err
+	// The permit is spent only now, when a real authenticator has produced a
+	// real credential — and in the same transaction that creates the user and
+	// stores the credential, so the box is never left holding a user with no
+	// passkey (which would close registration forever) or a spent code with no
+	// user.
+	if err := s.st.CompleteRegistration(ctx, blob.EnrollmentCode, u, sc); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEnrollmentRequired, err)
 	}
 
 	if _, err := s.IssueSession(ctx, w, r, u.ID, sc.ID); err != nil {

@@ -249,3 +249,40 @@ func TestDocumentMatchesSPAContract(t *testing.T) {
 		}
 	}
 }
+
+// TestDocumentLoadsMermaidOnlyWhenNeeded pins the diagram bootstrap.
+//
+// The bundle is 3.2 MB, so a document with no diagram must not pull it. And the
+// injection must stay a classic script: a module script is fetched in CORS mode,
+// and the sandboxed frame's opaque origin sends `Origin: null`, so a module
+// would need CORS headers the asset does not serve. That failure only shows up
+// inside the sandbox, which is the worst place to debug it.
+func TestDocumentLoadsMermaidOnlyWhenNeeded(t *testing.T) {
+	r := NewRenderer()
+
+	plain, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "mermaid-frame.js") {
+		t.Error("a document with no diagram still loads the 3.2 MB mermaid bundle")
+	}
+
+	withDiagram, err := r.Document("t", []Section{
+		{Kind: "mermaid", ID: "at_1", Content: "flowchart LR\n A-->B\n"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(withDiagram, "/assets/mermaid-frame.js") {
+		t.Error("a document with a diagram does not load the renderer")
+	}
+	if strings.Contains(withDiagram, `type="module"`) || strings.Contains(withDiagram, "s.type") {
+		t.Error("the bundle must be injected as a classic script; a module is fetched in CORS mode")
+	}
+	// The diagram source must still be present, so a failed load degrades to
+	// readable source rather than a blank box.
+	if !strings.Contains(withDiagram, "flowchart LR") {
+		t.Error("diagram source is not in the document; a failed load would show nothing")
+	}
+}

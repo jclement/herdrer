@@ -58,6 +58,17 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, "test"), st, u
 }
 
+// newTestServerNoUser returns a server on a box that has never been enrolled,
+// which is the state the registration ceremony actually runs against.
+func newTestServerNoUser(t *testing.T) (*Server, *store.Store, *store.User) {
+	t.Helper()
+	s, st, _ := newTestServer(t)
+	if _, err := st.DB().ExecContext(context.Background(), `DELETE FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	return s, st, nil
+}
+
 // route is one endpoint and the principal it must demand.
 type route struct {
 	method string

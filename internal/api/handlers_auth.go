@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -65,8 +66,29 @@ func (s *Server) handleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	u, err := s.auth.FinishRegistration(r.Context(), w, r)
 	if err != nil {
-		s.audit(r, "auth.register_failed", "", nil)
-		WriteError(w, http.StatusForbidden, CodeForbidden, "registration could not be completed")
+		// The client gets a deliberately coarse message, but the operator must
+		// be able to find out what actually happened: an opaque failure with
+		// no server-side cause is undebuggable from a phone at the exact
+		// moment you most need to get in.
+		slog.Error("passkey registration failed", "err", err, "ip", clientIP(r), "ua", r.UserAgent())
+		s.audit(r, "auth.register_failed", "", map[string]any{"error": err.Error()})
+
+		// These two are worth distinguishing to the user. By the time the code
+		// is checked the caller has already completed a real authenticator
+		// ceremony, so saying "the code was wrong" enumerates nothing — and
+		// "registration could not be completed" when the only problem is a
+		// stale code is a genuinely miserable dead end.
+		switch {
+		case errors.Is(err, auth.ErrEnrollmentRequired):
+			WriteError(w, http.StatusForbidden, CodeForbidden,
+				"that enrollment code is not valid any more — mint a fresh one with `herdrer enroll` on the server")
+		case errors.Is(err, auth.ErrCeremonyMissing):
+			WriteError(w, http.StatusForbidden, CodeForbidden,
+				"the registration attempt expired or was started in another tab — reload and try again")
+		default:
+			WriteError(w, http.StatusForbidden, CodeForbidden,
+				"the passkey could not be verified — reload and try again")
+		}
 		return
 	}
 	WriteJSON(w, http.StatusOK, publicUser(u))
@@ -84,6 +106,7 @@ func (s *Server) handleLoginBegin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	u, err := s.auth.FinishLogin(r.Context(), w, r)
 	if err != nil {
+		slog.Warn("passkey login failed", "err", err, "ip", clientIP(r))
 		// One response for every failure mode. A caller cannot distinguish an
 		// unknown credential from a bad signature from an expired challenge.
 		Unauthorized(w)

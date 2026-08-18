@@ -204,6 +204,19 @@ func newLimiter(perMinute, burst float64) *limiter {
 	return &limiter{buckets: map[string]*bucket{}, rate: perMinute / 60, capacity: burst}
 }
 
+// relax removes the limit on an existing limiter, in place.
+//
+// The middleware closes over the *limiter at construction, so reassigning the
+// server's field has no effect — tests must mutate the object the closure
+// already holds.
+func (l *limiter) relax() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rate = 1e9
+	l.capacity = 1e9
+	l.buckets = map[string]*bucket{}
+}
+
 func (l *limiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
