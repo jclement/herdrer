@@ -131,6 +131,40 @@ description = "Build linux/amd64 and deploy to the configured host"
 depends = ["build:linux"]
 run = "./scripts/deploy.sh"
 
+[tasks.ship]
+description = "check + push + build + deploy — the whole way out, in order"
+run = """
+#!/usr/bin/env bash
+#
+# One command, because the failure mode this prevents is a real one: a change
+# that is committed and pushed but never deployed leaves the repo and the live
+# box disagreeing, and herdrer is the thing you reach the box *with*. A green
+# push is not a shipped change.
+#
+# The order matters. check runs first so a red suite never reaches the remote;
+# push before deploy so the deployed binary always corresponds to a commit that
+# exists somewhere other than this laptop.
+set -euo pipefail
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "error: working tree is dirty — commit first, then ship" >&2
+  git status --short >&2
+  exit 1
+fi
+
+echo "==> check"
+mise run check
+
+echo "==> push"
+git push origin "$(git rev-parse --abbrev-ref HEAD)"
+
+echo "==> build + deploy"
+mise run deploy
+
+echo
+echo "shipped $(git rev-parse --short HEAD) to ${HERDRER_DEPLOY_HOST:?set HERDRER_DEPLOY_HOST}"
+"""
+
 # --- housekeeping ------------------------------------------------------------
 
 [tasks."db:new"]
