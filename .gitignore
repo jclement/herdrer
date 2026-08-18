@@ -1,0 +1,24 @@
+# build artifacts
+/bin/
+/dist/
+# The SPA build output is an artifact, but the directory must exist for the
+# //go:embed all:dist directive to compile on a fresh clone before anyone has
+# run `mise run web:build`. Ignore the contents, keep the placeholder.
+internal/webui/dist/*
+!internal/webui/dist/.keep
+
+# local state
+.env
+mise.local.toml
+*.db
+*.db-shm
+*.db-wal
+/state/
+
+# js
+node_modules/
+web/dist/
+.vite/
+
+# os
+.DS_Store

@@ -1,0 +1,139 @@
+# Release. Triggered by a v* tag, which is pushed by `mise run release` — never
+# by hand, and never to work around a red pipeline.
+#
+# THIS FILE'S NAME IS PART OF THE SECURITY CONTRACT. scripts/install.sh verifies
+# the cosign bundle against the certificate identity
+#
+#   ^https://github\.com/jclement/herdrer/\.github/workflows/release\.yml@refs/tags/v
+#
+# so renaming this file, or moving the signing step into a reusable workflow,
+# invalidates every signature every installer in the field knows how to check.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Least privilege at the top; the release job widens it, the gate job does not.
+permissions:
+  contents: read
+
+jobs:
+  # A tag must not be able to produce a release if the tests fail. This is the
+  # same gate ci.yml runs on every push, duplicated rather than pulled in with
+  # workflow_call: this is the one file whose name and contents install.sh
+  # pins a signing identity against, and it is worth being readable end to end
+  # without chasing a `uses:` into another file. The cost is that a change to
+  # the gate has to be made in two places; ci.yml says so too.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Cache bun store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('web/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
+      - run: mise run setup
+
+      # Before anything compiles Go: internal/webui/dist is a build output.
+      - run: mise run build
+
+      - run: mise run check
+
+      # Release builds are CGO_ENABLED=0; -race requires cgo, so it is turned
+      # back on for this step only.
+      - name: Go tests with the race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  release:
+    name: release
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release and upload assets
+      id-token: write # OIDC token for keyless cosign and for attestation
+      attestations: write # actions/attest-build-provenance
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # GoReleaser needs the full history and every tag to compute the
+          # version and build a changelog against the previous release.
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Cache bun store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('web/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
+      # go mod download and bun install. The SPA build itself is a GoReleaser
+      # before-hook, not a step here, so that a local `goreleaser release
+      # --snapshot` embeds a real SPA too — the "green build, blank page"
+      # failure mode is worth guarding in both places. See .goreleaser.yml.
+      - run: mise run setup
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A GitHub PAT with write access to jclement/homebrew-tap. It is the
+          # only repository secret this project needs — there is no Cloudflare
+          # deploy here (unlike herdr-web, herdrer has no relay Worker) and no
+          # registry login, because there are no container images. No secret is
+          # available to ci.yml or to any pull-request build.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # The middle tier of install.sh's verification ladder. Attesting the
+      # checksums file rather than a glob of paths registers every artifact
+      # listed inside it as a subject, so `gh attestation verify <tarball>`
+      # resolves by the tarball's own digest — which is what the installer
+      # actually runs.
+      #
+      # This lands a few seconds after the release is published, so a download
+      # that wins that race sees the gh tier fail. install.sh warns rather than
+      # dies there and falls through to the checksum, which is the right
+      # behaviour; the cosign tier above is unaffected because GoReleaser
+      # signs before it uploads.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-checksums: dist/checksums.txt

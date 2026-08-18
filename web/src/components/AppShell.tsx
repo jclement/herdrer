@@ -1,0 +1,172 @@
+import type { ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
+import { Bot, ChevronLeft, Inbox, Monitor, Moon, Settings, Sun } from "lucide-react";
+import { useTheme } from "../lib/theme";
+import { taglineForDate } from "../lib/taglines";
+import { cx } from "./ui";
+
+const THEME_ICON = { system: Monitor, light: Sun, dark: Moon } as const;
+
+export function Header({
+  title,
+  back,
+  right,
+}: {
+  title?: ReactNode;
+  back?: { to: string; label: string };
+  right?: ReactNode;
+}) {
+  const { theme, cycle } = useTheme();
+  const ThemeIcon = THEME_ICON[theme];
+
+  return (
+    <header
+      className="sticky top-0 z-30 bg-chrome text-chrome-fg"
+      style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+    >
+      <div className="flex h-10 items-center gap-2 px-2">
+        {back ? (
+          // Standalone web apps have no browser back button; every leaf carries its own.
+          <Link
+            to={back.to}
+            className="-ml-1 flex h-9 w-9 items-center justify-center rounded hover:bg-white/10"
+            aria-label={back.label}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Link>
+        ) : (
+          <Link to="/" className="px-1 text-sm font-semibold tracking-tight">
+            herdrer
+          </Link>
+        )}
+
+        <div className="min-w-0 flex-1 truncate text-sm font-medium">{title}</div>
+
+        <nav className="hidden items-center gap-1 lg:flex">
+          <HeaderTab to="/" label="Review" />
+          <HeaderTab to="/agents" label="Agents" />
+          <HeaderTab to="/settings" label="Settings" />
+        </nav>
+
+        {right}
+
+        <button
+          onClick={cycle}
+          aria-label={`Theme: ${theme}. Click to change.`}
+          title={`Theme: ${theme}`}
+          className="flex h-9 w-9 items-center justify-center rounded text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
+        >
+          <ThemeIcon className="w-4 h-4" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function HeaderTab({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      to={to}
+      activeOptions={{ exact: to === "/" }}
+      className="rounded px-2 py-1 text-xs text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
+      activeProps={{ className: "bg-white/10 text-chrome-fg" }}
+    >
+      {label}
+    </Link>
+  );
+}
+
+export function BottomNav({
+  reviewBadge,
+  agentBadge,
+  warnMore,
+}: {
+  reviewBadge: number;
+  agentBadge: number;
+  warnMore?: boolean;
+}) {
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-2 lg:hidden"
+      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+    >
+      <div className="grid grid-cols-3">
+        <NavTab
+          to="/"
+          exact
+          icon={<Inbox className="w-4 h-4" />}
+          label="Review"
+          badge={reviewBadge}
+        />
+        <NavTab to="/agents" icon={<Bot className="w-4 h-4" />} label="Agents" badge={agentBadge} />
+        <NavTab
+          to="/settings"
+          icon={<Settings className="w-4 h-4" />}
+          label="More"
+          dot={warnMore}
+        />
+      </div>
+    </nav>
+  );
+}
+
+function NavTab({
+  to,
+  icon,
+  label,
+  badge,
+  dot,
+  exact,
+}: {
+  to: string;
+  icon: ReactNode;
+  label: string;
+  badge?: number;
+  dot?: boolean;
+  exact?: boolean;
+}) {
+  return (
+    <Link
+      to={to}
+      activeOptions={{ exact: !!exact }}
+      className="relative flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] text-muted"
+      activeProps={{ className: "text-accent" }}
+    >
+      <span className="relative">
+        {icon}
+        {badge !== undefined && badge > 0 && (
+          <span className="absolute -right-2.5 -top-2 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-white">
+            {badge > 99 ? "99+" : badge}
+          </span>
+        )}
+        {dot && <span className="absolute -right-1.5 -top-1 h-2 w-2 rounded-full bg-warn" />}
+      </span>
+      {label}
+    </Link>
+  );
+}
+
+export function Footer({ version, host }: { version?: string; host?: string }) {
+  const year = new Date().getFullYear();
+  return (
+    <footer className="px-3 py-4 text-center text-xs text-muted">
+      <div>{taglineForDate()}</div>
+      <div className="mt-1">
+        (C) {year} Jeff Clement, {version ? `v${version}` : "DEV"}
+        {host ? ` · ${host}` : ""}
+      </div>
+    </footer>
+  );
+}
+
+/** Page body with room for the fixed bottom nav and the home indicator. */
+export function Page({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <main
+      className={cx("mx-auto w-full max-w-3xl px-0 lg:px-4", className)}
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)" }}
+    >
+      {children}
+    </main>
+  );
+}

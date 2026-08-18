@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Built by `bun run build:frame`; copied into dist by the main build.
+public/assets/

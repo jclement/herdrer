@@ -1,0 +1,4 @@
+node_modules
+dist
+../internal/webui/dist
+bun.lock

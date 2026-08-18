@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* Class-driven dark mode: the pre-paint script owns the class. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans:
+    "Inter var", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /* Semantic tokens. Light values live here; .dark overrides them below. */
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f8fa;
+  --color-surface-3: #eef1f5;
+  --color-heading: #0f172a;
+  --color-body: #334155;
+  --color-muted: #64748b;
+  --color-border: #dfe4ea;
+  --color-hover: #f1f5f9;
+  --color-selected: #e0f2fe;
+  --color-accent: #0b6bcb;
+  --color-accent-fg: #ffffff;
+  --color-ok: #157f3d;
+  --color-warn: #a86000;
+  --color-danger: #c02626;
+  --color-info: #0b6bcb;
+
+  --color-chrome: #0b0f14;
+  --color-chrome-fg: #d7e0ea;
+  --color-chrome-muted: #8493a3;
+  --color-chrome-border: #1c2530;
+
+  --color-diff-add: #e5f5ea;
+  --color-diff-add-fg: #0f5c2e;
+  --color-diff-del: #fdeaea;
+  --color-diff-del-fg: #8f1d1d;
+  --color-diff-meta: #eef1f5;
+}
+
+.dark {
+  --color-surface: #0f141a;
+  --color-surface-2: #141b23;
+  --color-surface-3: #1a222c;
+  --color-heading: #e7eef5;
+  --color-body: #c2ccd7;
+  --color-muted: #8b98a5;
+  --color-border: #26303b;
+  --color-hover: #1a222c;
+  --color-selected: #10293b;
+  --color-accent: #4aa8ff;
+  --color-accent-fg: #06121e;
+  --color-ok: #46c07a;
+  --color-warn: #e0a03a;
+  --color-danger: #f2666a;
+  --color-info: #4aa8ff;
+
+  --color-diff-add: #10281b;
+  --color-diff-add-fg: #8fdcab;
+  --color-diff-del: #2a1416;
+  --color-diff-del-fg: #f3a0a3;
+  --color-diff-meta: #1a222c;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-body);
+  font-family: var(--font-sans);
+  /* The page never scrolls sideways. Ever. */
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Focus rings everywhere, one definition. */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* Scroll containers inside the page must not chain into Safari's edge-swipe. */
+.scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* Wrapped diff lines read as continuations, not as new lines. */
+.diff-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-indent: -1.25rem;
+  padding-left: 1.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

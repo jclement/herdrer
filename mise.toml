@@ -1,0 +1,201 @@
+# herdrer — tools and the task contract.
+# The contract (setup/dev/test/lint/fmt/check) is defined in ~/.claude/CLAUDE.md.
+# Everything below it is specific to this project.
+
+[tools]
+go = "1.26.6"
+bun = "latest"
+
+[env]
+# Local development runs plain HTTP on loopback. WebAuthn treats http://localhost
+# as a secure context, so passkeys work in dev without a certificate.
+HERDRER_ADDR = "127.0.0.1:7799"
+HERDRER_TLS_MODE = "off"
+HERDRER_DOMAIN = "localhost"
+HERDRER_ORIGIN = "http://localhost:7799"
+HERDRER_STATE_DIR = "{{config_root}}/state"
+
+# --- the contract ------------------------------------------------------------
+
+[tasks.setup]
+description = "Zero to runnable: Go modules, web dependencies, state dir"
+run = """
+set -euo pipefail
+go mod download
+(cd web && bun install)
+mkdir -p state && chmod 700 state
+echo "Ready. 'mise run dev' starts the server and the SPA dev server."
+"""
+
+[tasks.dev]
+description = "Run the server and the Vite dev server together"
+depends = ["web:install"]
+run = """
+set -euo pipefail
+trap 'kill 0' EXIT
+(cd web && bun run dev) &
+go run ./cmd/herdrer serve &
+wait
+"""
+
+[tasks."dev:server"]
+description = "Run only the Go server (SPA served from the embedded build)"
+run = "go run ./cmd/herdrer serve"
+
+[tasks.test]
+description = "Full suite, non-interactive"
+run = """
+set -euo pipefail
+go test ./...
+if [ -d web/node_modules ]; then (cd web && bun run test --run); fi
+"""
+
+[tasks.lint]
+description = "Vet, format check and typecheck. Never mutates files"
+run = """
+set -euo pipefail
+test -z "$(gofmt -l ./cmd ./internal)" || { echo "gofmt needed:"; gofmt -l ./cmd ./internal; exit 1; }
+go vet ./...
+if [ -d web/node_modules ]; then (cd web && bun run typecheck); fi
+"""
+
+[tasks.fmt]
+description = "The mutating counterpart of lint"
+run = """
+set -euo pipefail
+gofmt -w ./cmd ./internal
+if [ -d web/node_modules ]; then (cd web && bun run fmt); fi
+"""
+
+[tasks.check]
+description = "lint + test — the gate before calling work done"
+depends = ["lint", "test"]
+
+# --- build and ship ----------------------------------------------------------
+
+[tasks."web:install"]
+description = "Install web dependencies if missing"
+run = "test -d web/node_modules || (cd web && bun install)"
+sources = ["web/package.json", "web/bun.lock"]
+outputs = ["web/node_modules/.bun-tag"]
+
+[tasks."web:build"]
+description = "Build the SPA into internal/webui/dist for embedding"
+depends = ["web:install"]
+run = """
+set -euo pipefail
+(cd web && bun run build)
+# Vite empties the output directory, which deletes the placeholder that keeps
+# `//go:embed all:dist` compiling on a fresh clone. Put it back so the tree is
+# clean after a build and a checkout without a web build still builds.
+cat > internal/webui/dist/.keep <<'KEEP'
+The SPA build output lands here (mise run web:build). This file is tracked so
+that //go:embed all:dist compiles on a fresh clone, before anyone has built the
+web assets; the binary then serves a placeholder page explaining what to run.
+KEEP
+"""
+
+[tasks.build]
+description = "Build ./bin/herdrer for this machine, SPA embedded"
+depends = ["web:build"]
+run = """
+set -euo pipefail
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o bin/herdrer ./cmd/herdrer
+echo "bin/herdrer $VERSION"
+"""
+
+[tasks."build:linux"]
+description = "Cross-compile a static linux/amd64 binary into ./dist"
+depends = ["web:build"]
+run = """
+set -euo pipefail
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+mkdir -p dist
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags "-s -w -X main.version=$VERSION" -o dist/herdrer-linux-amd64 ./cmd/herdrer
+echo "dist/herdrer-linux-amd64 $VERSION"
+ls -lh dist/herdrer-linux-amd64
+"""
+
+[tasks.deploy]
+description = "Build linux/amd64 and deploy to the configured host"
+depends = ["build:linux"]
+run = "./scripts/deploy.sh"
+
+# --- housekeeping ------------------------------------------------------------
+
+[tasks."db:new"]
+description = "Scaffold a numbered migration: mise run db:new add_widgets"
+run = """
+set -euo pipefail
+NAME="${1:?usage: mise run db:new <name>}"
+N=$(printf '%04d' $(( $(ls internal/migrations/*.sql 2>/dev/null | wc -l | tr -d ' ') + 1 )))
+F="internal/migrations/${N}_${NAME}.sql"
+printf -- "-- %s\\n" "$NAME" > "$F"
+echo "$F"
+"""
+
+[tasks.clean]
+description = "Build artifacts"
+run = "rm -rf bin dist internal/webui/dist web/dist"
+
+[tasks."dev:reset"]
+description = "Also blow away local state and node_modules"
+depends = ["clean"]
+run = """
+set -euo pipefail
+rm -rf web/node_modules
+read -p "Delete local database and passkeys in ./state? [y/N]: " C
+[[ "${C:-N}" =~ ^[Yy]$ ]] && rm -rf state && echo "state removed" || echo "state kept"
+"""
+
+[tasks.release]
+description = "Interactive release: bump version, tag, and push"
+run = """
+#!/bin/bash
+set -e
+
+CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+echo "Current version: $CURRENT_TAG"
+
+VERSION_NUM=${CURRENT_TAG#v}
+IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NUM"
+
+NEXT_PATCH="v$MAJOR.$MINOR.$((PATCH + 1))"
+NEXT_MINOR="v$MAJOR.$((MINOR + 1)).0"
+NEXT_MAJOR="v$((MAJOR + 1)).0.0"
+
+echo ""
+echo "Select release type:"
+echo "  1) patch  → $NEXT_PATCH"
+echo "  2) minor  → $NEXT_MINOR"
+echo "  3) major  → $NEXT_MAJOR"
+echo "  q) quit"
+echo ""
+read -p "Choice [1]: " CHOICE
+CHOICE=${CHOICE:-1}
+
+case $CHOICE in
+    1) NEW_VERSION=$NEXT_PATCH ;;
+    2) NEW_VERSION=$NEXT_MINOR ;;
+    3) NEW_VERSION=$NEXT_MAJOR ;;
+    q|Q) echo "Cancelled."; exit 0 ;;
+    *) echo "Invalid choice"; exit 1 ;;
+esac
+
+echo ""
+echo "Creating release: $NEW_VERSION"
+git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+
+read -p "Push tag to origin? [Y/n]: " CONFIRM
+CONFIRM=${CONFIRM:-Y}
+if [[ ! $CONFIRM =~ ^[Yy]$ ]]; then
+    git tag -d "$NEW_VERSION" >/dev/null 2>&1
+    echo "Cancelled. Tag removed."
+    exit 0
+fi
+
+git push origin "$NEW_VERSION"
+echo "Tag pushed. CI builds and releases from it."
+"""

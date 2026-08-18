@@ -1,0 +1,102 @@
+# deploy/Caddyfile.template — the public edge for herdrer.
+#
+# This is a TEMPLATE. scripts/provision.sh substitutes __DOMAIN__ and
+# __UPSTREAM__ and writes the result to /etc/caddy/Caddyfile. Do not edit the
+# rendered file on the box; edit this and re-run provision.sh, or your change
+# is one `provision.sh` away from being overwritten.
+#
+# What it does:
+#   * terminates TLS with a Let's Encrypt certificate obtained over HTTP-01
+#     (the name already resolves to this box's public IP and ufw opens 80/443,
+#     which is everything HTTP-01 needs)
+#   * reverse-proxies every request to herdrer on __UPSTREAM__
+#
+# Why there is a proxy at all: herdrer forks shells. The process that forks
+# shells should not be the one holding CAP_NET_BIND_SERVICE on a public
+# interface, and should not be the one parsing ACME. Caddy holds both; herdrer
+# holds a loopback socket and nothing else.
+#
+# Assumes: Caddy >= 2.7 from the official Cloudsmith apt repo, running as the
+# system `caddy` user, with /var/log/caddy writable by it (the .deb creates it).
+#
+# Rendered to /etc/caddy/Caddyfile by scripts/provision.sh.
+# After editing:  sudo caddy validate --config /etc/caddy/Caddyfile
+#                 sudo systemctl reload caddy
+{
+	# Uncomment with a real address to receive Let's Encrypt expiry warnings.
+	# Caddy renews automatically, so this is a safety net, not a requirement.
+	# email you@example.com
+
+	servers {
+		timeouts {
+			# The only timeout that should ever fire here. A client that opens a
+			# connection and never finishes its request headers is not a terminal
+			# session, it is a scanner.
+			read_header 30s
+
+			# Everything else is deliberately unlimited. herdrer's agent long-poll
+			# holds a request open for up to HERDRER_LONGPOLL_MAX_SECONDS (300s by
+			# default) and its terminal WebSocket stays open for hours. Any finite
+			# write timeout cuts both off mid-flight, and the symptom — a terminal
+			# that dies after exactly N seconds, or an agent that sees a hang-up
+			# instead of {"status":"open"} — is the single most common way this
+			# deployment breaks. Do not "tidy" these into real numbers.
+			read_body 0
+			write 0
+
+			# `idle` applies between keep-alive requests, not to an in-flight one,
+			# so it cannot cut a long-poll. Kept comfortably above the 300s
+			# long-poll ceiling anyway so a polling agent's connection is never
+			# reaped in the gap between two polls.
+			idle 15m
+		}
+	}
+}
+
+__DOMAIN__ {
+	log {
+		output file /var/log/caddy/herdrer.access.log {
+			roll_size 20MiB
+			roll_keep 10
+			roll_keep_for 2160h
+		}
+		format json
+	}
+
+	# Caddy never compresses a hijacked connection, so the WebSocket is
+	# untouched; flush_interval below keeps streamed and long-polled responses
+	# out of the encoder's buffer.
+	encode zstd gzip
+
+	reverse_proxy __UPSTREAM__ {
+		# `caddy validate` calls these three "unnecessary" because it only checks
+		# that the header reaches the upstream. They are not: verified against
+		# caddy 2.11, `header_up X-Forwarded-For {remote_host}` *replaces* an
+		# inbound "X-Forwarded-For: 9.9.9.9" with the address Caddy observed,
+		# where the default would have appended to the attacker's value.
+		#
+		# Set, not appended, on purpose. This is the edge: the only trustworthy
+		# client address is the one Caddy itself observed. Caddy's default is to
+		# append to an inbound X-Forwarded-For, which would let a client seed the
+		# chain with a forged hop that herdrer's audit log would then believe.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+
+		# -1 disables response buffering entirely: bytes reach the client as they
+		# arrive. Required for the terminal stream and for any SSE.
+		flush_interval -1
+
+		transport http {
+			# Fast failure when herdrer is down or restarting — this is a loopback
+			# dial, so 5s is generous.
+			dial_timeout 5s
+
+			# 0 = no timeout, for the same reason as the server block above. These
+			# govern the Caddy->herdrer leg; a finite value here breaks long-polls
+			# even though the client-facing timeouts are unlimited.
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}

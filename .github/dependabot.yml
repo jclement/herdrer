@@ -1,0 +1,52 @@
+# "A release you can't rebuild safely six months later isn't shipped."
+#
+# Weekly, grouped, and deliberately noisy about security: this binary
+# terminates TLS on the public internet and hands out shells, and govulncheck
+# in CI only tells you about a vulnerability after it has been published
+# against a version you already ship.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine bumps; anything that needs thought (a major)
+      # still arrives on its own.
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # The SPA. Not the repo root — package.json lives in web/.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Actions are pinned to commit SHAs in both workflows, which is the right
+  # trade for a repo whose whole point is a verifiable release — but a pinned
+  # SHA never moves on its own, including off a compromised one. Dependabot is
+  # what makes SHA pinning maintainable rather than a slow rot.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"

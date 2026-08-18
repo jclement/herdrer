@@ -1,0 +1,111 @@
+# CI — the gate that `mise run check` is on a laptop, run for everyone.
+#
+# The rule here is that CI drives the repo's own mise tasks and never
+# reimplements them. If a step below runs a raw tool it is because the task
+# contract deliberately does not cover it (`-race`, govulncheck), and the
+# comment says so.
+#
+# No secret is available to any job in this file. Pull requests from forks get
+# a read-only token and nothing else; the only repository secret this project
+# has is HOMEBREW_TAP_TOKEN, and it is used exclusively by release.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege by default. No job here widens it.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+
+      # mise-action caches the toolchain (go, bun) itself. These two cache the
+      # things it does not: the module/build cache and bun's package store.
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Cache bun store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('web/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
+      # go mod download + bun install + the state dir.
+      - run: mise run setup
+
+      # `mise run build` depends on web:build, so this is the SPA build *and*
+      # the Go build in one step — and it has to come before anything that
+      # compiles Go, because internal/webui/embed.go does `//go:embed all:dist`
+      # and that directory is a build output, not a tracked file. Without it
+      # `go vet ./...` fails to load the package at all.
+      - name: Build (SPA + binary)
+        run: mise run build
+
+      # gofmt check, go vet, tsc --noEmit, go test, vitest — the same gate a
+      # local session runs before calling work done.
+      #
+      # release.yml deliberately repeats this whole job rather than calling it,
+      # so a change here needs the same change there.
+      - run: mise run check
+
+      # Not part of `mise run check`, deliberately: release builds are
+      # CGO_ENABLED=0 (see .goreleaser.yml) but the race detector *requires*
+      # cgo, so this one step has to turn it back on. herdrer runs a PTY
+      # multiplexer, a websocket hub and an event bus across goroutines; the
+      # race detector is the only thing that looks at that.
+      - name: Go tests with the race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      # Blocking, not advisory. This binary terminates TLS on the public
+      # internet and hands out shells; a known-vulnerable dependency is not a
+      # thing to merge and fix later. govulncheck is symbol-aware, so it only
+      # fires on vulnerabilities in code that is actually reachable.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The installer smoke test. It proves scripts/install.sh still works as a
+  # piped installer on a box that has nothing on it — which is the only place
+  # it ever runs, and a place no developer's laptop resembles.
+  #
+  # Only on push to main: it is slow-ish, and a PR that has not landed cannot
+  # have broken what users are piping from main.
+  installer:
+    name: installer smoke test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # A container rather than `container:` at the job level, because the
+      # thing under test refuses to run as root and GitHub's job containers
+      # run as root with a root-owned workspace. Driving docker ourselves lets
+      # the script run as an unprivileged user, which is the real scenario.
+      - name: Run install.sh in a clean ubuntu:24.04
+        run: |
+          docker run --rm \
+            -v "$PWD:/src:ro" \
+            ubuntu:24.04 \
+            bash /src/.github/scripts/installer-smoke.sh

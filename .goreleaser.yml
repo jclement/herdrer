@@ -1,0 +1,190 @@
+# Releases are cut by tag: `mise run release` picks the bump, tags, and pushes;
+# .github/workflows/release.yml does everything after that. Never hand-build a
+# release artifact — scripts/install.sh verifies a signing identity that only a
+# tag build of release.yml can produce, so a hand-built tarball is a tarball
+# nobody can install with --require-signature.
+#
+# See ~/.claude/skills/shipping for the house pipeline, and ~/Developer/herdr-web
+# for the sibling this is modelled on.
+version: 2
+
+project_name: herdrer
+
+# ---------------------------------------------------------------------------
+# The SPA has to exist before the Go build, and it has to be real.
+#
+# internal/webui/embed.go does `//go:embed all:dist`. That directive errors on a
+# *missing* directory but happily embeds an *empty* one — and .gitignore keeps a
+# .keep placeholder in there precisely so a fresh clone compiles. The failure
+# mode is therefore not a build error: it is a release that builds green, ships,
+# deploys, and serves a blank page to a phone on a train.
+#
+# So: build the SPA, then assert it landed. The assertion is the point. A floor
+# size catches a build that emitted a stub index.html, and the assets/ check
+# catches a Vite run that wrote the HTML shell but no bundle.
+before:
+  hooks:
+    - mise run web:build
+    - sh .github/scripts/assert-spa-embedded.sh
+
+builds:
+  - id: herdrer
+    main: ./cmd/herdrer
+    binary: herdrer
+    env:
+      # Static. The binary is scp'd onto a Hetzner box and has to run there
+      # without matching a host libc; modernc.org/sqlite is pure Go precisely
+      # so this can be true.
+      - CGO_ENABLED=0
+    flags:
+      # Strips the build machine's paths out of the binary. Reproducibility,
+      # and it keeps /home/runner/work/... out of panic traces.
+      - -trimpath
+    ldflags:
+      - -s -w
+      # `version` is a package-level var in package main (cmd/herdrer/main.go),
+      # printed by `herdrer version`. Unlike drillbit and herdr-web this binary
+      # has no `commit` or `buildDate` var, so nothing else is stamped —
+      # -X against a symbol that does not exist is silently ignored by the
+      # linker, which is exactly how a stamp rots without anyone noticing.
+      - -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # scripts/install.sh refuses darwin/amd64 outright ("macOS builds are
+      # Apple Silicon only"), so building one would produce an asset the
+      # installer would never select.
+      - goos: darwin
+        goarch: amd64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    # install.sh selects an asset with `grep -i "_${os}_${arch}\.tar\.gz$"`, so
+    # this name template is load-bearing, not cosmetic.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Not wrapped in a directory: install.sh extracts into a temp dir and then
+    # requires "$TMP/herdrer" to be a file. GoReleaser's default is already
+    # unwrapped; it is stated here because a change to it silently breaks the
+    # installer at the last step, after the checksum has already passed.
+    wrap_in_directory: false
+    files:
+      - LICENSE
+      - README.md
+      # The installer that put this binary here, so a copy travels with the
+      # release and can be read offline.
+      - src: scripts/install.sh
+        dst: install.sh
+
+checksum:
+  # install.sh looks for an asset named exactly `checksums.txt` and refuses to
+  # install if the release does not publish one.
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# ---------------------------------------------------------------------------
+# Keyless cosign. install.sh's top verification tier runs
+#
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     --certificate-identity-regexp '^https://github\.com/jclement/herdrer/\.github/workflows/release\.yml@refs/tags/v'
+#
+# which means three things are contractual: the bundle is named
+# <artifact>.sigstore.json, the signature is produced by GitHub Actions OIDC,
+# and the workflow that produces it is named exactly release.yml on a v* tag.
+# Renaming that workflow file breaks every installer in the field.
+signs:
+  # The checksum file first — this is the one the installer verifies, and
+  # through it every artifact listed inside.
+  - id: checksums
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+  # And the archives directly, so an artifact pulled on its own — by a mirror,
+  # by Homebrew, by someone who only downloaded the tarball — can be verified
+  # without also fetching checksums.txt. These bundles are not listed in
+  # checksums.txt, which is fine: install.sh anchors all three of its asset
+  # greps with `$`, so a `.tar.gz.sigstore.json` can never be mistaken for the
+  # tarball and a `checksums.txt.sigstore.json` never for checksums.txt.
+  - id: archives
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: archive
+    output: true
+
+# `brew install jclement/tap/herdrer`. GoReleaser 2.17 deprecated `brews:` in
+# favour of casks; the tap is jclement/homebrew-tap and the push needs
+# HOMEBREW_TAP_TOKEN, the only repository secret this project uses.
+homebrew_casks:
+  - name: herdrer
+    directory: Casks
+    repository:
+      owner: jclement
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/jclement/herdrer"
+    description: "One inbox for everything your coding agents are waiting on you for"
+    license: "MIT"
+    hooks:
+      post:
+        # Strip the quarantine flag Gatekeeper puts on an unnotarised download,
+        # so the binary runs without the right-click-open dance.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/herdrer"]
+          end
+
+# No container images. herdrer opens Herdr's 0600 unix socket on the host and
+# spawns the user's shells; neither survives a container boundary, so an image
+# would be a download that cannot do its job. The deploy story is a systemd
+# user unit — deploy/ and scripts/provision.sh.
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: jclement
+    name: herdrer
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/jclement/herdrer/main/scripts/install.sh | sh
+    ```
+
+    Verify before you trust it — `cosign` makes the top tier real:
+
+    ```sh
+    mise use -g cosign@latest
+    curl -fsSL https://raw.githubusercontent.com/jclement/herdrer/main/scripts/install.sh \
+      | HERDRER_REQUIRE_SIGNATURE=1 sh
+    ```
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

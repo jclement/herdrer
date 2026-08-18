@@ -1,0 +1,167 @@
+# herdrer.service.template — the systemd *user* unit for the herdrer server.
+#
+# This is a TEMPLATE. scripts/provision.sh substitutes __DOMAIN__, __ADDR__ and
+# __USER__ and installs the result to ~/.config/systemd/user/herdrer.service.
+#
+# Why a user unit and not a system unit: herdr's control socket is mode 0600
+# owned by that user, so a different UID physically cannot open it, and every PTY
+# herdrer spawns has to be the developer's shell with the developer's dotfiles, mise shims,
+# ssh-agent and ~/Developer checkouts. There is nothing root buys here, so
+# root is not involved. `loginctl enable-linger <user>` is what makes this start
+# at boot and survive logout.
+#
+# Assumes: the binary at ~/.local/bin/herdrer, Caddy terminating TLS on
+# 80/443 and proxying to __ADDR__, and the state directory writable.
+
+[Unit]
+Description=herdrer — remote dev console
+Documentation=https://github.com/jclement/herdrer
+After=network-online.target
+Wants=network-online.target
+
+# Crashloop protection. Note this is what bounds Restart=always below, not the
+# restart mode: five starts in a minute and systemd gives up until a manual
+# `systemctl --user reset-failed herdrer`.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=exec, not Type=notify. notify would be better — `systemctl start` would
+# block until migrations had run and the listener was bound, instead of racing
+# a health check — but it requires the binary to call sd_notify(READY=1).
+# herdrer does not yet. Switch to:
+#     Type=notify
+#     NotifyAccess=main
+#     WatchdogSec=30
+# the day it does; leaving notify on a binary that never signals hangs start
+# for the full timeout and then reports failure.
+Type=exec
+
+ExecStart=%h/.local/bin/herdrer serve
+WorkingDirectory=%h
+
+# Restart=always, NOT on-failure. An in-place binary swap by scripts/deploy.sh
+# stops the unit cleanly and expects the supervisor to bring the new binary
+# back up; a future self-update path will exit zero for the same reason. Under
+# Restart=on-failure a clean exit is a clean stop, and the box goes dark from a
+# phone — the exact failure herdrer exists to prevent.
+Restart=always
+RestartSec=2
+
+# Graceful shutdown: herdrer stops accepting, lets in-flight requests finish,
+# closes sockets and kills its PTYs. 20s is comfortable.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=herdrer
+
+# WebSocket per browser tab, PTY pairs per mirror, long-poll per agent. The
+# default 1024 is not obviously enough and raising it costs nothing.
+LimitNOFILE=65536
+
+# --- configuration -----------------------------------------------------------
+# Every key here is documented in .env.sample. Values are the deployment shape:
+# Caddy owns TLS and the public ports, herdrer owns loopback and nothing else.
+
+# A systemd user unit inherits a bare PATH that does NOT include ~/.local/bin
+# — which is where both herdrer and herdr are installed, and where mise puts
+# its shims. Without this, exec.LookPath("herdr") fails at startup, herdrer
+# logs herdr=false, and the agent board is silently empty forever. It also
+# becomes the PATH every spawned PTY inherits, so a browser terminal would
+# otherwise not find the tools a login shell finds.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The hostname browsers use. WebAuthn binds credentials to it; changing it
+# invalidates every registered passkey, so treat it as permanent.
+Environment=HERDRER_DOMAIN=__DOMAIN__
+Environment=HERDRER_ORIGIN=https://__DOMAIN__
+
+# off = plain HTTP on loopback. Legitimate here precisely because the only
+# thing that can reach that socket is Caddy, which terminates real TLS. The
+# origin above stays https:// because that is what the browser sees, and that
+# is what WebAuthn checks.
+Environment=HERDRER_TLS_MODE=off
+
+# Loopback only. herdrer never binds a public interface.
+Environment=HERDRER_ADDR=__ADDR__
+
+# 0700, holds herdrer.db, the VAPID keypair and the ACME cache (unused here).
+Environment=HERDRER_STATE_DIR=%h/.local/state/herdrer
+
+# HERDRER_HERDR_CONFIG_DIR is deliberately left unset: empty means autodetect
+# under this user's XDG config, and since herdrer runs as the same user that
+# runs Herdr, autodetect is right. Setting it would only ever be wrong.
+#
+# The terminal is the point of the box, so it stays on. Set false to build a
+# review-only deployment with no PTY and no shell reachable.
+Environment=HERDRER_TERMINAL_ENABLED=true
+
+# Optional overrides and anything secret (VAPID keys, an ntfy URL) go here.
+# The leading '-' means the unit starts fine when the file does not exist.
+EnvironmentFile=-%h/.config/herdrer/herdrer.env
+
+# --- hardening ---------------------------------------------------------------
+# Deliberately short. herdrer's job is to run arbitrary commands as that user, so no
+# mount-namespace directive can be a security boundary: what protects this
+# service is the passkey, the one-time enrollment token, and the fact that no
+# registration endpoint is ever open. `systemd-analyze security herdrer.service`
+# will score this badly. That score is measuring the wrong thing here; do not
+# chase it.
+#
+# Kept, because they cost nothing and have no known interaction with PTYs,
+# unix sockets, or the toolchains a spawned shell runs:
+# NOTE: this is a *user* unit, and a user manager may not manipulate the
+# capability bounding set. Any directive that implies a CapabilityBoundingSet
+# change — ProtectClock, ProtectKernelLogs, ProtectKernelTunables,
+# ProtectKernelModules — fails the unit outright at step CAPABILITIES with
+# status=218 and an unhelpful "Operation not permitted". They are not merely
+# ignored here; they prevent the service from ever starting. Do not add them
+# back without moving to a system unit, which the 0600 Herdr socket rules out.
+#
+# What is left is seccomp- and prctl-based, which a user manager can apply.
+# NoNewPrivileges is the one that earns its place: it means a popped browser
+# terminal cannot sudo, even once the service user has a password.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+#
+# Deliberately OMITTED, each for a specific reason — every one of these is
+# inherited by the shells herdrer spawns, which is what makes them dangerous
+# here rather than merely useless:
+#
+#   ProtectHome=              The entire job is in $HOME: ~/.config/herdr/herdr.sock,
+#                             ~/.local/state/herdrer, ~/Developer/*. Anything but
+#                             `no` breaks the socket, the database, or both.
+#   ProtectSystem=strict      Mounts everything read-only but /dev, /proc, /sys.
+#                             Every `go build`, `npm install` and `git commit` in
+#                             a pane writes outside $HOME (caches, /tmp, module
+#                             caches). `full` would be survivable hygiene, but it
+#                             is hygiene, not containment, since the child shell
+#                             can still write everywhere else.
+#   PrivateTmp=               Gives every tool the PTY launches a *different*
+#                             /tmp than your SSH session: editor sockets, LSP
+#                             servers, tmux, anything using $TMPDIR for IPC.
+#                             A day of debugging for zero security against an
+#                             attacker who already has $HOME.
+#   PrivateDevices=           Historically breaks openpty() — the private /dev
+#                             bind-mounts an outer /dev/pts whose ptmx is mode
+#                             000. Modern systemd usually gets this right, and
+#                             "usually" is the wrong confidence level for the
+#                             feature that *is* the product.
+#   MemoryDenyWriteExecute=   Inherited by children. Breaks every JIT — Node,
+#                             the JVM, anything an agent runs.
+#   SystemCallFilter=         Inherited by children. Breaks somebody's toolchain
+#                             at 2am with an opaque SIGSYS, and buys nothing
+#                             against a threat model where the attacker has a
+#                             shell already.
+#   RestrictNamespaces=       Breaks rootless Docker/Podman and any unshare-based
+#                             tooling launched from a pane.
+#   ProtectControlGroups=     Remounts /sys/fs/cgroup read-only inside the
+#                             namespace, inherited by spawned shells; rootless
+#                             Podman/Docker on the cgroupfs manager fails there.
+
+[Install]
+WantedBy=default.target

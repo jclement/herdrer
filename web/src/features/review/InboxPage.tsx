@@ -1,0 +1,217 @@
+import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, Coffee, Plus, WifiOff } from "lucide-react";
+import { describeError } from "../../lib/api";
+import { useAgents, useCreateTask, useReviews } from "../../lib/queries";
+import { BAND_LABEL, groupInbox } from "../../lib/inbox";
+import { taglineForDate } from "../../lib/taglines";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Field,
+  SectionHeader,
+  SkeletonRows,
+  inputClass,
+} from "../../components/ui";
+import { Sheet } from "../../components/Sheet";
+import { useToast } from "../../components/toast";
+import { InboxRow } from "./InboxRow";
+import { InstallNudge } from "./InstallNudge";
+
+export function InboxPage() {
+  const { data, isPending, error, refetch, isFetching, dataUpdatedAt } = useReviews("all");
+  const agents = useAgents();
+  const [showStale, setShowStale] = useState(false);
+  const [showAnswered, setShowAnswered] = useState(false);
+  const [composing, setComposing] = useState(false);
+
+  const now = Date.now();
+  const groups = useMemo(() => groupInbox(data ?? [], now), [data, now]);
+
+  const working = agents.data?.filter((a) => a.status === "working").length ?? 0;
+  const idle = (agents.data?.length ?? 0) - working;
+
+  return (
+    <div>
+      {/* An error with cached rows is a staleness banner, not an error page. */}
+      {error && data && (
+        <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+          <WifiOff className="w-4 h-4" />
+          Showing what was here at {new Date(dataUpdatedAt).toLocaleTimeString()} —{" "}
+          {describeError(error)}
+        </div>
+      )}
+
+      <InstallNudge />
+
+      {isPending && <SkeletonRows rows={5} />}
+      {error && !data && (
+        <ErrorState message={describeError(error)} onRetry={() => void refetch()} />
+      )}
+
+      {data && groups.bands.length === 0 && groups.answered.length === 0 && (
+        <EmptyState
+          icon={<Coffee className="w-6 h-6" />}
+          title="Nothing waiting."
+          message={
+            agents.data
+              ? `${working} agent${working === 1 ? "" : "s"} working, ${Math.max(0, idle)} idle. ${taglineForDate()}`
+              : taglineForDate()
+          }
+          action={
+            <Button variant="primary" onClick={() => setComposing(true)}>
+              <Plus className="w-4 h-4" />
+              Queue a task
+            </Button>
+          }
+        />
+      )}
+
+      {groups.bands.map(({ band, items }) => {
+        const collapsed = band === 3 && !showStale;
+        return (
+          <section key={band}>
+            <SectionHeader
+              title={
+                band === 3 ? (
+                  <button
+                    className="flex items-center gap-1"
+                    onClick={() => setShowStale((v) => !v)}
+                    aria-expanded={!collapsed}
+                  >
+                    {collapsed ? (
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                    {BAND_LABEL[band]} · {items.length}
+                  </button>
+                ) : (
+                  `${BAND_LABEL[band]} · ${items.length}`
+                )
+              }
+            />
+            {!collapsed && (
+              <div className="divide-y divide-border">
+                {items.map((item) => (
+                  <InboxRow key={item.id} item={item} now={now} />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+
+      {groups.answered.length > 0 && (
+        <section>
+          <SectionHeader
+            title={
+              <button
+                className="flex items-center gap-1"
+                onClick={() => setShowAnswered((v) => !v)}
+                aria-expanded={showAnswered}
+              >
+                {showAnswered ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+                Recently answered · {groups.answered.length}
+              </button>
+            }
+          />
+          {showAnswered && (
+            <div className="divide-y divide-border">
+              {groups.answered.map((item) => (
+                <InboxRow key={item.id} item={item} now={now} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {isFetching && !isPending && (
+        <div className="px-3 py-2 text-[11px] text-muted">refreshing…</div>
+      )}
+
+      {/* Compose a task — the reverse channel. Human session only. */}
+      <button
+        onClick={() => setComposing(true)}
+        aria-label="Queue a task for an agent"
+        className="fixed right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-accent-fg shadow-lg lg:right-8"
+        style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)" }}
+      >
+        <Plus className="w-5 h-5" />
+      </button>
+
+      <TaskComposer open={composing} onClose={() => setComposing(false)} />
+    </div>
+  );
+}
+
+function TaskComposer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [body, setBody] = useState("");
+  const [scope, setScope] = useState("");
+  const create = useCreateTask();
+  const toast = useToast();
+
+  const submit = () => {
+    create.mutate(
+      { body: body.trim(), ...(scope.trim() ? { scope: scope.trim() } : {}) },
+      {
+        onSuccess: () => {
+          toast.show("Task queued. The next agent that asks will claim it.", { tone: "ok" });
+          setBody("");
+          setScope("");
+          onClose();
+        },
+        onError: (err) => toast.show(describeError(err), { tone: "danger" }),
+      },
+    );
+  };
+
+  return (
+    <Sheet
+      open={open}
+      title="Queue a task"
+      onClose={onClose}
+      footer={
+        <Button
+          variant="primary"
+          size="lg"
+          className="w-full"
+          loading={create.isPending}
+          disabled={body.trim() === ""}
+          onClick={submit}
+        >
+          Queue it
+        </Button>
+      }
+    >
+      <div className="space-y-3 p-3">
+        <Field
+          label="What should someone look at?"
+          hint="An agent claims the oldest matching task."
+        >
+          <textarea
+            className={`${inputClass} min-h-28 font-sans`}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Look at why the solver got slow after the index change."
+          />
+        </Field>
+        <Field label="Scope" hint="Optional. Restricts which agent may claim it.">
+          <input
+            className={inputClass}
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="be"
+          />
+        </Field>
+      </div>
+    </Sheet>
+  );
+}
