@@ -140,7 +140,9 @@ func (s *Server) handleListPushSubs(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{
 			"id": p.ID, "service": host, "user_agent": p.UserAgent,
-			"created_at": p.CreatedAt,
+			"created_at": p.CreatedAt, "sent_count": p.SentCount,
+			"last_status": p.LastStatus, "last_error": p.LastError,
+			"last_sent_at": p.LastSentAt,
 		})
 	}
 	WriteList(w, http.StatusOK, out, Meta{Total: len(out), Page: 1, PerPage: len(out)})

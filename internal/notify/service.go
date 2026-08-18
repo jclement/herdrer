@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -120,6 +121,16 @@ func (s *Service) Send(ctx context.Context, userID string, p Payload) {
 		slog.Error("list push subscriptions", "err", err)
 		return
 	}
+	// Say so when there is nothing to send to. Silence here was
+	// indistinguishable from a successful send, which is the state you are in
+	// when someone reports "notifications do not work" — and on iOS the
+	// overwhelmingly likely cause is that no subscription exists at all,
+	// because Safari only grants one to a PWA installed to the home screen.
+	if len(subs) == 0 {
+		slog.Warn("push: nothing to deliver to — no subscriptions for this user",
+			"user", userID, "title", p.Title)
+		return
+	}
 	body, _ := json.Marshal(p)
 
 	for _, sub := range subs {
@@ -135,18 +146,36 @@ func (s *Service) Send(ctx context.Context, userID string, p Payload) {
 			Urgency:         webpush.UrgencyHigh,
 		})
 		if err != nil {
-			slog.Warn("push failed", "endpoint", truncEndpoint(sub.Endpoint), "err", err)
+			slog.Warn("push failed", "endpoint", truncEndpoint(sub.Endpoint),
+				"ua", truncUA(sub.UserAgent), "err", err)
+			_ = s.st.RecordPushAttempt(ctx, sub.ID, 0, err.Error())
 			continue
 		}
 		// 404 and 410 mean the subscription is gone for good — the browser
 		// uninstalled the PWA or the push service expired it. Anything else is
 		// transient and the subscription is left alone.
-		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			slog.Info("push subscription expired, removing", "endpoint", truncEndpoint(sub.Endpoint))
+		switch {
+		case resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusGone:
+			slog.Info("push subscription expired, removing",
+				"endpoint", truncEndpoint(sub.Endpoint), "ua", truncUA(sub.UserAgent))
 			_ = s.st.DeletePushSub(ctx, sub.ID)
-		} else if resp.StatusCode >= 300 {
-			slog.Warn("push rejected", "status", resp.StatusCode, "endpoint", truncEndpoint(sub.Endpoint))
+		case resp.StatusCode >= 300:
+			// Read a little of the body: push services explain themselves
+			// there, and the status alone rarely says which of several
+			// things went wrong.
+			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			slog.Warn("push rejected", "status", resp.StatusCode,
+				"endpoint", truncEndpoint(sub.Endpoint), "ua", truncUA(sub.UserAgent),
+				"detail", strings.TrimSpace(string(detail)))
+			_ = s.st.RecordPushAttempt(ctx, sub.ID, resp.StatusCode, strings.TrimSpace(string(detail)))
 			_ = s.st.MarkPushFailed(ctx, sub.ID)
+		default:
+			// Log success too. A send path that is quiet when it works and
+			// quiet when it is never called cannot be debugged from a phone.
+			slog.Info("push delivered", "status", resp.StatusCode,
+				"endpoint", truncEndpoint(sub.Endpoint), "ua", truncUA(sub.UserAgent),
+				"title", p.Title)
+			_ = s.st.RecordPushAttempt(ctx, sub.ID, resp.StatusCode, "")
 		}
 		resp.Body.Close()
 	}
@@ -173,6 +202,19 @@ func (s *Service) sendNtfy(ctx context.Context, p Payload) {
 		return
 	}
 	resp.Body.Close()
+}
+
+// truncUA keeps the log readable while still identifying the device, which is
+// usually the answer: a Mac subscription and a missing iPhone one look very
+// different and mean very different things.
+func truncUA(ua string) string {
+	if i := strings.Index(ua, ")"); i > 0 {
+		return ua[:i+1]
+	}
+	if len(ua) > 48 {
+		return ua[:48]
+	}
+	return ua
 }
 
 func truncEndpoint(e string) string {

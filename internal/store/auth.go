@@ -400,6 +400,13 @@ type PushSub struct {
 	Auth      string
 	UserAgent string
 	CreatedAt time.Time
+
+	// Outcome of the most recent delivery attempt, so "it does not work" can
+	// be answered with evidence rather than a shrug.
+	LastStatus int
+	LastError  string
+	LastSentAt *time.Time
+	SentCount  int
 }
 
 // UpsertPushSub records a subscription, replacing any earlier one with the same
@@ -418,7 +425,9 @@ func (s *Store) UpsertPushSub(ctx context.Context, p *PushSub) error {
 // ListPushSubs returns a user's live subscriptions.
 func (s *Store) ListPushSubs(ctx context.Context, userID string) ([]*PushSub, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_id, endpoint, p256dh, auth, user_agent, created_at
+		`SELECT id, user_id, endpoint, p256dh, auth, user_agent, created_at,
+		        COALESCE(last_status, 0), COALESCE(last_error, ''), last_sent_at,
+		        COALESCE(sent_count, 0)
 		 FROM push_subs WHERE user_id = ? ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, err
@@ -428,10 +437,16 @@ func (s *Store) ListPushSubs(ctx context.Context, userID string) ([]*PushSub, er
 	for rows.Next() {
 		var p PushSub
 		var created int64
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Endpoint, &p.P256dh, &p.Auth, &p.UserAgent, &created); err != nil {
+		var sent sql.NullInt64
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Endpoint, &p.P256dh, &p.Auth, &p.UserAgent,
+			&created, &p.LastStatus, &p.LastError, &sent, &p.SentCount); err != nil {
 			return nil, err
 		}
 		p.CreatedAt = time.Unix(created, 0)
+		if sent.Valid {
+			t := time.Unix(sent.Int64, 0)
+			p.LastSentAt = &t
+		}
 		out = append(out, &p)
 	}
 	return out, rows.Err()
@@ -446,6 +461,15 @@ func (s *Store) DeletePushSub(ctx context.Context, id string) error {
 // MarkPushFailed records a transient failure without dropping the subscription.
 func (s *Store) MarkPushFailed(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE push_subs SET failed_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+// RecordPushAttempt stores the outcome of one delivery attempt.
+func (s *Store) RecordPushAttempt(ctx context.Context, id string, status int, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE push_subs
+		SET last_status = ?, last_error = ?, last_sent_at = ?, sent_count = COALESCE(sent_count, 0) + 1
+		WHERE id = ?`, status, errMsg, time.Now().Unix(), id)
 	return err
 }
 
