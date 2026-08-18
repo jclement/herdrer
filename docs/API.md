@@ -187,6 +187,7 @@ reaped after 24 hours.
 
 ```
 GET  /api/v1/push/key                 -> {public_key}
+GET  /api/v1/push/subscriptions       -> [{id, service, user_agent, created_at}]
 POST /api/v1/push/subscribe {endpoint, keys:{p256dh, auth}} -> 204
 POST /api/v1/push/test                -> 204
 ```

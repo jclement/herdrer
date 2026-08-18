@@ -204,5 +204,34 @@ export function useMintEnrollment() {
 /** Everything the session touched is invalid the moment the session ends. */
 export async function resetAfterLogout(qc: QueryClient): Promise<void> {
   qc.clear();
+  await purgeDeviceCaches();
   await qc.invalidateQueries({ queryKey: qk.authState });
+}
+
+/**
+ * Remove every trace of the session from the device.
+ *
+ * Clearing the in-memory query cache is not enough on its own: a service worker
+ * that has cached anything holds it on disk, outliving the tab, the session and
+ * the logout. herdrer's worker no longer caches API responses at all, but an
+ * *already installed* older worker still holds what it cached before the
+ * update, and activation is lazy — so logging out has to say so explicitly
+ * rather than wait for a reload that may not come.
+ *
+ * Best effort by design: a failure here must never block the logout itself.
+ */
+export async function purgeDeviceCaches(): Promise<void> {
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: "herdrer:purge" });
+  } catch {
+    // No controller, or messaging unavailable. The caches.delete below still runs.
+  }
+  try {
+    if (typeof caches !== "undefined") {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch {
+    // Cache Storage unavailable or blocked; nothing more we can do from here.
+  }
 }

@@ -286,3 +286,92 @@ func TestDocumentLoadsMermaidOnlyWhenNeeded(t *testing.T) {
 		t.Error("diagram source is not in the document; a failed load would show nothing")
 	}
 }
+
+// TestSyntaxHighlightingCoversTheLanguagesWeCareAbout is a direct answer to
+// "does the inbox actually highlight code", asserted rather than assumed.
+//
+// It covers both routes an agent can send code by: a fenced block inside
+// body_md, and a code attachment. They go through different code paths
+// (goldmark's extension vs the attachment path), so both are checked.
+func TestSyntaxHighlightingCoversTheLanguagesWeCareAbout(t *testing.T) {
+	r := NewRenderer()
+	samples := map[string]string{
+		"csharp":     "public class Foo { public int Bar => 1; }",
+		"go":         "func main() { fmt.Println(\"hi\") }",
+		"typescript": "const x: number = 1; export default x;",
+		"javascript": "const x = 1; export default x;",
+		"elixir":     "defmodule Foo do\n  def bar, do: :ok\nend",
+		"bash":       "set -euo pipefail\necho \"$HOME\"",
+		"diff":       "--- a/x\n+++ b/x\n-old\n+new",
+	}
+
+	for lang, src := range samples {
+		// Route 1: a code attachment.
+		out, ok := highlight(src, lang, false)
+		if !ok {
+			t.Errorf("%s: attachment was not highlighted", lang)
+		}
+		if !strings.Contains(out, "<span") {
+			t.Errorf("%s: highlighted output has no spans:\n%s", lang, out)
+		}
+
+		// Route 2: a fenced block in body_md, which must survive sanitisation.
+		frag, err := r.Fragment("```" + lang + "\n" + src + "\n```\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(frag, "<span") || !strings.Contains(frag, "class=") {
+			t.Errorf("%s: fenced code lost its highlighting to the sanitiser:\n%s", lang, frag)
+		}
+	}
+}
+
+// TestHighlightAliasesAuthorsActuallyType keeps the common short forms working.
+func TestHighlightAliasesAuthorsActuallyType(t *testing.T) {
+	for _, lang := range []string{"cs", "c#", "ts", "tsx", "js", "ex", "exs", "sh", "shell", "yml", "golang"} {
+		if lexerFor(lang) == nil {
+			t.Errorf("no lexer resolved for %q, which authors do type", lang)
+		}
+	}
+	// And an unknown language degrades to readable text rather than an error.
+	out, ok := highlight("some text", "klingon", false)
+	if ok {
+		t.Error("an unknown language reported itself highlighted")
+	}
+	if !strings.Contains(out, "some text") {
+		t.Error("an unknown language lost the source")
+	}
+}
+
+// TestHighlightEscapesHostileSource checks the highlighter cannot be used to
+// smuggle markup: the source is agent-authored and may be adversarial.
+func TestHighlightEscapesHostileSource(t *testing.T) {
+	hostile := `</code></pre><script>fetch('/api/v1/tokens')</script><pre><code>`
+	for _, lang := range []string{"go", "bash", "typescript", ""} {
+		out, _ := highlight(hostile, lang, false)
+		if strings.Contains(strings.ToLower(out), "<script") {
+			t.Fatalf("lang=%q: highlighter emitted a live script tag:\n%s", lang, out)
+		}
+	}
+}
+
+// TestDocumentCarriesTheHighlightStylesheet — classed spans with no stylesheet
+// are invisible highlighting, which looks exactly like the feature not working.
+func TestDocumentCarriesTheHighlightStylesheet(t *testing.T) {
+	r := NewRenderer()
+	for _, dark := range []bool{false, true} {
+		doc, err := r.Document("t", []Section{
+			{Kind: "code", Language: "go", Content: "func main() {}", ID: "at_1"},
+		}, dark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(doc, ".chroma") {
+			t.Errorf("dark=%v: document has no chroma stylesheet", dark)
+		}
+	}
+	// The two themes must not produce the same stylesheet, or one of them is wrong.
+	if highlightCSS(false) == highlightCSS(true) {
+		t.Error("light and dark produce an identical stylesheet")
+	}
+}

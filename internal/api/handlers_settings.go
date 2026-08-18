@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -112,6 +113,37 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "push.subscribed", "", nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListPushSubs shows what the *server* believes is subscribed.
+//
+// Without this, a browser reporting no subscription is ambiguous: it could be a
+// browser that forgot, or a server that never recorded one, and those have
+// opposite fixes. The endpoint is deliberately coarse — an endpoint URL is a
+// capability to send a push, so only a truncated form and the metadata needed
+// to recognise a device are returned.
+func (s *Server) handleListPushSubs(w http.ResponseWriter, r *http.Request) {
+	u := UserFrom(r.Context())
+	subs, err := s.st.ListPushSubs(r.Context(), u.ID)
+	if err != nil {
+		Internal(w, err, "list push subs")
+		return
+	}
+	out := make([]map[string]any, 0, len(subs))
+	for _, p := range subs {
+		host := p.Endpoint
+		if i := strings.Index(host, "://"); i > 0 {
+			host = host[i+3:]
+		}
+		if i := strings.IndexByte(host, '/'); i > 0 {
+			host = host[:i]
+		}
+		out = append(out, map[string]any{
+			"id": p.ID, "service": host, "user_agent": p.UserAgent,
+			"created_at": p.CreatedAt,
+		})
+	}
+	WriteList(w, http.StatusOK, out, Meta{Total: len(out), Page: 1, PerPage: len(out)})
 }
 
 func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) {

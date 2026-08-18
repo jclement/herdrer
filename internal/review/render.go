@@ -8,8 +8,10 @@ import (
 	html2 "html"
 	"strings"
 
+	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
+	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	"github.com/yuin/goldmark/extension"
 	ghtml "github.com/yuin/goldmark/renderer/html"
 )
@@ -36,20 +38,35 @@ import (
 // Layer 3 is the one that actually holds. The others reduce how often it is
 // tested.
 type Renderer struct {
-	md     goldmark.Markdown
-	policy *bluemonday.Policy
+	// One markdown instance per theme: goldmark's highlighting extension binds
+	// a chroma style at construction, and fenced code inside a review body is
+	// as common as an attachment — usually more so.
+	mdLight goldmark.Markdown
+	mdDark  goldmark.Markdown
+	policy  *bluemonday.Policy
 }
 
 // NewRenderer builds the pipeline.
 func NewRenderer() *Renderer {
-	md := goldmark.New(
-		goldmark.WithExtensions(extension.GFM, extension.Strikethrough, extension.Table),
-		goldmark.WithRendererOptions(
-			// Deliberately NOT html.WithUnsafe(). Raw HTML in the source is
-			// escaped and displayed, never parsed.
-			ghtml.WithXHTML(),
-		),
-	)
+	build := func(style string) goldmark.Markdown {
+		return goldmark.New(
+			goldmark.WithExtensions(
+				extension.GFM, extension.Strikethrough, extension.Table,
+				highlighting.NewHighlighting(
+					highlighting.WithStyle(style),
+					// Classes, not inline styles: the document already carries
+					// the stylesheet, and a style attribute per span triples the
+					// size of a long block.
+					highlighting.WithFormatOptions(chromahtml.WithClasses(true)),
+				),
+			),
+			goldmark.WithRendererOptions(
+				// Deliberately NOT html.WithUnsafe(). Raw HTML in the source is
+				// escaped and displayed, never parsed.
+				ghtml.WithXHTML(),
+			),
+		)
+	}
 
 	p := bluemonday.UGCPolicy()
 	p.AllowAttrs("class").Matching(bluemonday.SpaceSeparatedTokens).OnElements("pre", "code", "span", "div", "table")
@@ -64,13 +81,26 @@ func NewRenderer() *Renderer {
 	p.RequireNoReferrerOnLinks(true)
 	p.AddTargetBlankToFullyQualifiedLinks(true)
 
-	return &Renderer{md: md, policy: p}
+	return &Renderer{mdLight: build(styleLight), mdDark: build(styleDark), policy: p}
 }
 
 // Fragment renders markdown to sanitised HTML with no surrounding document.
+//
+// The highlighter's <span class="..."> output survives sanitisation because the
+// policy allows class on span, pre and code — if that allowance is ever
+// tightened, fenced code silently loses its colours rather than breaking, which
+// is why there is a test asserting the classes are still there.
 func (r *Renderer) Fragment(src string) (string, error) {
+	return r.fragment(src, false)
+}
+
+func (r *Renderer) fragment(src string, dark bool) (string, error) {
+	md := r.mdLight
+	if dark {
+		md = r.mdDark
+	}
 	var buf bytes.Buffer
-	if err := r.md.Convert([]byte(src), &buf); err != nil {
+	if err := md.Convert([]byte(src), &buf); err != nil {
 		return "", fmt.Errorf("render markdown: %w", err)
 	}
 	return r.policy.Sanitize(buf.String()), nil
@@ -126,14 +156,23 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 			if lang == "" && s.Kind == "diff" {
 				lang = "diff"
 			}
+			// Highlighted output is chroma's, generated from source it escapes
+			// itself, so it is emitted directly. It must NOT go through the
+			// markdown sanitiser, which would strip the class attributes the
+			// stylesheet depends on and leave unstyled soup.
+			code, ok := highlight(s.Content, lang, dark)
+			cls := "code"
+			if ok {
+				cls = "code chroma"
+			}
 			body.WriteString(`<figure class="code-wrap"` + anchor(s.ID) + `>`)
 			if s.Title != "" {
 				body.WriteString("<figcaption>" + html2.EscapeString(s.Title) + "</figcaption>")
 			}
-			body.WriteString(`<pre class="code lang-` + html2.EscapeString(lang) + `"><code>` +
-				html2.EscapeString(s.Content) + `</code></pre></figure>`)
+			body.WriteString(`<pre class="` + cls + ` lang-` + html2.EscapeString(lang) +
+				`"><code>` + code + `</code></pre></figure>`)
 		default:
-			frag, err := r.Fragment(s.Content)
+			frag, err := r.fragment(s.Content, dark)
 			if err != nil {
 				return "", err
 			}
@@ -151,7 +190,7 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-` + n + `' 'strict-dynamic'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>` + html2.EscapeString(title) + `</title>
-<style>` + rendererCSS + `</style>
+<style>` + rendererCSS + highlightCSS(dark) + `</style>
 </head><body>` + body.String() + `
 <script nonce="` + n + `">` + heightScript + diagramLoader(hasMermaid) + `</script>
 </body></html>`

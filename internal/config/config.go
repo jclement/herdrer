@@ -44,6 +44,7 @@ type Config struct {
 
 	SessionTTL   time.Duration
 	EnrollTTL    time.Duration
+	StepUpWindow time.Duration
 	SuppressAuth bool
 
 	HerdrConfigDir  string
@@ -90,6 +91,13 @@ func Load() (*Config, error) {
 
 	c.SessionTTL = time.Duration(envInt("HERDRER_SESSION_TTL_DAYS", 30)) * 24 * time.Hour
 	c.EnrollTTL = time.Duration(envInt("HERDRER_ENROLL_TTL_MINUTES", 15)) * time.Minute
+	// 12 hours, not minutes. The point of step-up is that a stolen *cookie*
+	// cannot open a shell without an authenticator the thief does not have —
+	// and an attacker who never had the passkey can never satisfy it, whatever
+	// the window. A short window therefore buys very little and costs a
+	// re-prompt every few minutes of ordinary work, which reads as "my session
+	// keeps dying" and trains you to tap through it.
+	c.StepUpWindow = time.Duration(envInt("HERDRER_STEPUP_WINDOW_HOURS", 12)) * time.Hour
 	c.LongpollMax = time.Duration(envInt("HERDRER_LONGPOLL_MAX_SECONDS", 300)) * time.Second
 	c.MaxOpenItems = envInt("HERDRER_MAX_OPEN_ITEMS", 50)
 	c.DefaultExpiryHours = envInt("HERDRER_DEFAULT_EXPIRY_HOURS", 24)

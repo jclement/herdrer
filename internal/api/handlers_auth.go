@@ -144,8 +144,8 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"user":                   publicUser(u),
 		"version":                s.version,
-		"stepped_up":             auth.SteppedUpRecently(sess),
-		"step_up_window_seconds": int(auth.StepUpWindow.Seconds()),
+		"stepped_up":             auth.SteppedUpRecently(sess, s.cfg.StepUpWindow),
+		"step_up_window_seconds": int(s.cfg.StepUpWindow.Seconds()),
 		"terminal_enabled":       s.terminal.Enabled(),
 		"herdr_present":          s.terminal.HasHerdr(),
 		"counts": map[string]int{
@@ -315,7 +315,7 @@ func (s *Server) handleStepUpFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"stepped_up_until": time.Now().Add(auth.StepUpWindow),
+		"stepped_up_until": time.Now().Add(s.cfg.StepUpWindow),
 		"credential":       map[string]any{"id": cred.ID, "name": cred.Name, "can_terminal": cred.CanTerminal},
 	})
 }
@@ -336,7 +336,7 @@ func (s *Server) handleSetCredentialTerminal(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	sess := SessionFrom(r.Context())
-	if !auth.SteppedUpRecently(sess) {
+	if !auth.SteppedUpRecently(sess, s.cfg.StepUpWindow) {
 		WriteError(w, http.StatusForbidden, CodeStepUpRequired,
 			"changing terminal permission needs a fresh passkey check")
 		return

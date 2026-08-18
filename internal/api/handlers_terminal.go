@@ -53,7 +53,7 @@ func (s *Server) handleTerminalTicket(w http.ResponseWriter, r *http.Request) {
 	// envelope provided, so a stolen cookie is otherwise a stolen shell. A
 	// fresh authenticator assertion — a real biometric or PIN, seconds ago —
 	// puts that property back exactly where it is worth the friction.
-	if !auth.SteppedUpRecently(sess) {
+	if !auth.SteppedUpRecently(sess, s.cfg.StepUpWindow) {
 		s.audit(r, "terminal.stepup_required", "", nil)
 		WriteError(w, http.StatusForbidden, CodeStepUpRequired,
 			"opening a terminal needs a fresh passkey check")
@@ -133,7 +133,7 @@ func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := SessionFrom(r.Context())
-	if !auth.SteppedUpRecently(sess) {
+	if !auth.SteppedUpRecently(sess, s.cfg.StepUpWindow) {
 		WriteError(w, http.StatusForbidden, CodeStepUpRequired,
 			"changing what the terminal is pointed at needs a fresh passkey check")
 		return

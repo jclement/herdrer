@@ -72,6 +72,7 @@ func (s *Server) routes() http.Handler {
 
 	// notifications
 	human("GET /api/v1/push/key", s.handlePushKey)
+	human("GET /api/v1/push/subscriptions", s.handleListPushSubs)
 	human("POST /api/v1/push/subscribe", s.handlePushSubscribe)
 	human("POST /api/v1/push/test", s.handlePushTest)
 

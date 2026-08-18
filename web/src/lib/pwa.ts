@@ -46,13 +46,29 @@ export async function readPushHealth(): Promise<PushHealth> {
   };
   if (!base.supported) return base;
   try {
-    const reg = await navigator.serviceWorker.getRegistration();
+    // `ready` rather than `getRegistration()`: on a reload the latter can
+    // resolve before the worker has activated and hand back undefined, so the
+    // page decides there is no subscription and offers to create one that
+    // already exists. That is the "turn it on, refresh, it forgot" bug.
+    //
+    // Raced against a timeout because `ready` never rejects — if no worker ever
+    // activates it simply hangs, and a settings page that never renders is
+    // worse than one that reports the truth pessimistically.
+    const reg = await withTimeout(navigator.serviceWorker.ready, 3000);
     const sub = await reg?.pushManager.getSubscription();
     base.endpoint = sub?.endpoint ?? null;
   } catch {
     /* a registration that is not there is not an error */
   }
   return base;
+}
+
+/** Resolves to null rather than hanging or throwing. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    p,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
 }
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {

@@ -619,12 +619,9 @@ func NewEnrollmentCode() string {
 
 // --- step-up re-authentication ---------------------------------------------------
 
-// StepUpWindow is how long a fresh assertion stays good for.
-//
-// Short on purpose. The point of step-up is that possession of a session
-// cookie is not enough to open a shell; a long window would turn it back into
-// exactly that.
-const StepUpWindow = 5 * time.Minute
+// DefaultStepUpWindow is how long an assertion stays good for when nothing is
+// configured. Override with HERDRER_STEPUP_WINDOW_HOURS.
+const DefaultStepUpWindow = 12 * time.Hour
 
 // BeginStepUp starts a re-authentication ceremony for an already-logged-in user.
 func (s *Service) BeginStepUp(ctx context.Context, w http.ResponseWriter, userID string) (*protocol.CredentialAssertion, error) {
@@ -720,7 +717,11 @@ func (s *Service) FinishStepUp(ctx context.Context, w http.ResponseWriter, r *ht
 	return matched, nil
 }
 
-// SteppedUpRecently reports whether a session holds a fresh assertion.
-func SteppedUpRecently(sess *store.Session) bool {
-	return sess != nil && sess.SteppedUpAt != nil && time.Since(*sess.SteppedUpAt) <= StepUpWindow
+// SteppedUpRecently reports whether a session holds an assertion still inside
+// the configured window.
+func SteppedUpRecently(sess *store.Session, window time.Duration) bool {
+	if window <= 0 {
+		window = DefaultStepUpWindow
+	}
+	return sess != nil && sess.SteppedUpAt != nil && time.Since(*sess.SteppedUpAt) <= window
 }

@@ -28,7 +28,8 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 		StateDir: dir, DBPath: filepath.Join(dir, "test.db"),
 		VAPIDPath:  filepath.Join(dir, "vapid.json"),
 		SessionTTL: time.Hour, EnrollTTL: 15 * time.Minute,
-		LongpollMax: 5 * time.Second, MaxOpenItems: 25,
+		StepUpWindow: auth.DefaultStepUpWindow,
+		LongpollMax:  5 * time.Second, MaxOpenItems: 25,
 		DefaultExpiryHours: 24, MaxExpiryHours: 168,
 		TerminalEnabled: true, TLSMode: config.TLSOff,
 	}
@@ -116,6 +117,7 @@ var everyRoute = []route{
 	{"GET", "/api/v1/tasks", "session"},
 	{"POST", "/api/v1/tasks", "session"},
 	{"GET", "/api/v1/push/key", "session"},
+	{"GET", "/api/v1/push/subscriptions", "session"},
 	{"POST", "/api/v1/push/subscribe", "session"},
 	{"POST", "/api/v1/push/test", "session"},
 	{"GET", "/api/v1/audit", "session"},
@@ -460,7 +462,7 @@ func TestStepUpExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Backdate the assertion past the window.
-	stale := time.Now().Add(-2 * auth.StepUpWindow).Unix()
+	stale := time.Now().Add(-2 * auth.DefaultStepUpWindow).Unix()
 	if _, err := st.DB().ExecContext(ctx,
 		`UPDATE sessions SET stepped_up_at = ? WHERE id = ?`, stale, sessID); err != nil {
 		t.Fatal(err)
