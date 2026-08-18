@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -522,5 +525,94 @@ func TestClientRoutesStillFallThrough(t *testing.T) {
 		if isNotARoute(strings.TrimPrefix(p, "/")) {
 			t.Errorf("%s was classified as a missing asset; it is a client route", p)
 		}
+	}
+}
+
+// pngBytes is a real 1x1 PNG, so content sniffing sees genuine magic bytes.
+var pngBytes = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+	return b
+}()
+
+// TestRawUploadIsNotEatenByFormParsing is the regression for a bug unit tests
+// missed and an end-to-end test found immediately.
+//
+// Calling r.FormFile unconditionally falls through to ParseForm for a
+// non-multipart POST, which consumes the whole body trying to read urlencoded
+// pairs. A raw `--data-binary @image.png` then arrives as nothing, and the
+// error says "that does not look like a PNG" — which sends you debugging the
+// image rather than the parser. curl sends
+// Content-Type: application/x-www-form-urlencoded by default, so this is the
+// *normal* path for an agent, not an edge case.
+func TestRawUploadIsNotEatenByFormParsing(t *testing.T) {
+	s, _, u := newTestServer(t)
+	_, secret, err := s.auth.MintToken(context.Background(), u.ID, "uploader",
+		[]string{auth.ScopeReviewWrite}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ct := range []string{
+		"application/x-www-form-urlencoded", // what curl --data-binary sends
+		"application/octet-stream",
+		"image/png",
+		"", // no content type at all
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/agent/assets", bytes.NewReader(pngBytes))
+		r.Header.Set("Authorization", "Bearer "+secret)
+		if ct != "" {
+			r.Header.Set("Content-Type", ct)
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusCreated {
+			t.Errorf("Content-Type %q: got %d, want 201; body %s", ct, w.Code, w.Body.String())
+			continue
+		}
+		if !strings.Contains(w.Body.String(), `"asset_id":"as_`) {
+			t.Errorf("Content-Type %q: no asset id in %s", ct, w.Body.String())
+		}
+	}
+}
+
+// TestMultipartUploadStillWorks keeps the browser path alive alongside the raw one.
+func TestMultipartUploadStillWorks(t *testing.T) {
+	s, _, u := newTestServer(t)
+	_, secret, _ := s.auth.MintToken(context.Background(), u.ID, "uploader",
+		[]string{auth.ScopeReviewWrite}, 0)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("image", "shot.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write(pngBytes)
+	mw.Close()
+
+	r := httptest.NewRequest("POST", "/api/v1/agent/assets", &buf)
+	r.Header.Set("Authorization", "Bearer "+secret)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("multipart upload: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestNonImageUploadIsRefused keeps this from becoming a write-anything endpoint.
+func TestNonImageUploadIsRefused(t *testing.T) {
+	s, _, u := newTestServer(t)
+	_, secret, _ := s.auth.MintToken(context.Background(), u.ID, "uploader",
+		[]string{auth.ScopeReviewWrite}, 0)
+
+	r := httptest.NewRequest("POST", "/api/v1/agent/assets",
+		strings.NewReader("#!/bin/sh\nrm -rf /\n"))
+	r.Header.Set("Authorization", "Bearer "+secret)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a shell script was accepted as an image: %d", w.Code)
 	}
 }

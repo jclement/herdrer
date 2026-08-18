@@ -2,10 +2,35 @@ package api
 
 import (
 	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"strings"
 
 	"github.com/jclement/herdrer/internal/paste"
 )
+
+// multipartFile returns the uploaded file when the request is genuinely
+// multipart, and nil otherwise.
+//
+// Calling r.FormFile unconditionally is a trap: for a non-multipart POST it
+// falls through to ParseForm, which *consumes the entire body* trying to parse
+// it as urlencoded pairs. A raw `--data-binary @image.png` upload then reaches
+// the reader as nothing at all, and the failure surfaces as "that does not look
+// like a PNG" — which sends you looking at the image instead of the parser.
+func multipartFile(r *http.Request) (multipart.File, bool) {
+	ct := r.Header.Get("Content-Type")
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil || !strings.HasPrefix(mt, "multipart/") {
+		return nil, false
+	}
+	file, _, err := r.FormFile("image")
+	if err != nil {
+		return nil, false
+	}
+	return file, true
+}
 
 // handlePaste accepts an image from the browser and returns a path to type at
 // an agent.
@@ -33,10 +58,10 @@ func (s *Server) handlePaste(w http.ResponseWriter, r *http.Request) {
 	// upload is refused at the socket rather than after being read.
 	r.Body = http.MaxBytesReader(w, r.Body, paste.MaxBytes+1024)
 
-	body := r.Body
 	// A browser may send either the raw blob or a multipart form; accept both,
 	// since which one you get depends on how the paste was constructed.
-	if file, _, err := r.FormFile("image"); err == nil {
+	var body io.Reader = r.Body
+	if file, ok := multipartFile(r); ok {
 		defer file.Close()
 		body = file
 	}

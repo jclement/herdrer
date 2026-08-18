@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -389,8 +390,8 @@ func (s *Server) handleAgentUploadAsset(w http.ResponseWriter, r *http.Request) 
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, review.MaxAssetBytes+1024)
 
-	body := r.Body
-	if file, _, err := r.FormFile("image"); err == nil {
+	var body io.Reader = r.Body
+	if file, ok := multipartFile(r); ok {
 		defer file.Close()
 		body = file
 	}
