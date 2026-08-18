@@ -92,7 +92,7 @@ export function Login() {
         )}
 
         {state && !state.enrolled && (
-          <div className="rounded border border-border bg-surface-2 p-4">
+          <div className="rounded-lg border border-border bg-surface-2 p-4">
             <div className="flex items-center gap-2 text-sm font-medium text-heading">
               <Terminal className="w-4 h-4" />
               No passkey registered yet
@@ -100,7 +100,7 @@ export function Login() {
             <p className="mt-2 text-xs text-body">
               This box has no users. Open a shell on it and run:
             </p>
-            <pre className="mt-2 overflow-x-auto rounded bg-surface-3 p-2 font-mono text-xs text-heading">
+            <pre className="scroll-x mt-2 rounded-md border border-border bg-surface-3 p-2 font-mono text-xs text-heading">
               herdrer enroll
             </pre>
             <p className="mt-2 text-xs text-muted">
@@ -115,8 +115,10 @@ export function Login() {
 
         {state?.enrolled && mode === "signin" && (
           <div className="space-y-3">
-            <div className="rounded border border-border bg-surface-2 p-4 text-center">
-              <Fingerprint className="mx-auto w-4 h-4 text-accent" />
+            <div className="rounded-lg border border-border bg-surface-2 p-5 text-center">
+              <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-accent/40 bg-accent-weak text-accent">
+                <Fingerprint className="w-5 h-5" />
+              </span>
               <p className="mt-2 text-sm text-heading">Sign in with your passkey</p>
               <p className="mt-1 text-xs text-muted">
                 {isStandalone()
@@ -136,7 +138,7 @@ export function Login() {
             </div>
             {state.enrollment_open && (
               <button
-                className="w-full text-center text-xs text-accent underline"
+                className="min-h-11 w-full text-center text-xs text-accent underline underline-offset-2"
                 onClick={() => setMode("register")}
               >
                 I have an enrollment code — add a passkey
@@ -146,7 +148,10 @@ export function Login() {
         )}
 
         {state && (mode === "register" || (!state.enrolled && state.enrollment_open)) && (
-          <form onSubmit={register} className="mt-4 space-y-3 rounded border border-border p-4">
+          <form
+            onSubmit={register}
+            className="mt-4 space-y-3 rounded-lg border border-border bg-surface-2 p-4"
+          >
             <div className="flex items-center gap-2 text-sm font-medium text-heading">
               <KeyRound className="w-4 h-4" />
               Register a passkey
@@ -186,7 +191,7 @@ export function Login() {
             {state.enrolled && (
               <button
                 type="button"
-                className="w-full text-center text-xs text-muted underline"
+                className="min-h-11 w-full text-center text-xs text-muted underline underline-offset-2"
                 onClick={() => setMode("signin")}
               >
                 Back to sign in
@@ -196,7 +201,7 @@ export function Login() {
         )}
 
         {failure && (
-          <div className="mt-3 rounded border border-danger/40 bg-danger/5 p-3 text-xs text-danger">
+          <div className="mt-3 rounded-md border border-danger/40 bg-danger-weak p-3 text-xs break-words text-danger">
             {failure}
           </div>
         )}

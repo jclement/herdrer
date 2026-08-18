@@ -42,8 +42,8 @@ export function ReviewRail({
         </span>
         <span
           className={cx(
-            "ml-auto rounded px-1.5 text-[11px] font-semibold leading-4 tabular-nums",
-            items.length > 0 ? "bg-danger text-white" : "text-muted",
+            "ml-auto rounded-full px-1.5 text-[11px] font-semibold leading-4 tabular-nums",
+            items.length > 0 ? "bg-danger text-danger-fg" : "text-muted",
           )}
         >
           {items.length}
@@ -65,7 +65,14 @@ export function ReviewRail({
               <li key={i.id}>
                 <button
                   onClick={() => onOpen(i.id)}
-                  className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-hover"
+                  className={cx(
+                    "flex w-full items-start gap-2 border-l-2 py-2 pl-2.5 pr-3 text-left transition-colors hover:bg-hover",
+                    // The rail is scanned, not read. The edge answers "is any
+                    // of this on fire" before a single title is.
+                    i.urgency === "blocking"
+                      ? "border-l-danger bg-danger-weak/40"
+                      : "border-l-transparent",
+                  )}
                 >
                   <div className="min-w-0 flex-1">
                     <div

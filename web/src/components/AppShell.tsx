@@ -27,7 +27,7 @@ export function Header({
 }) {
   return (
     <header
-      className="sticky top-0 z-30 bg-chrome text-chrome-fg"
+      className="sticky top-0 z-30 border-b border-chrome-border bg-chrome text-chrome-fg"
       style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
     >
       <div className="flex h-10 items-center gap-2 px-2">
@@ -35,7 +35,7 @@ export function Header({
           // Standalone web apps have no browser back button; every leaf carries its own.
           <Link
             to={back.to}
-            className="-ml-1 flex h-9 w-9 items-center justify-center rounded hover:bg-white/10"
+            className="-ml-1 flex h-10 w-10 items-center justify-center rounded transition-colors hover:bg-chrome-hover"
             aria-label={back.label}
           >
             <ChevronLeft className="w-4 h-4" />
@@ -87,8 +87,8 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label={`Theme: ${theme}. Click to change.`}
       title={`Theme: ${theme}`}
       className={cx(
-        "flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted",
-        "hover:bg-white/10 hover:text-chrome-fg",
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded text-chrome-muted",
+        "transition-colors hover:bg-chrome-hover hover:text-chrome-fg",
         className,
       )}
     >
@@ -102,8 +102,8 @@ function HeaderTab({ to, label, exact }: { to: string; label: string; exact?: bo
     <Link
       to={to}
       activeOptions={{ exact: !!exact }}
-      className="rounded px-2 py-1 text-xs text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
-      activeProps={{ className: "bg-white/10 text-chrome-fg" }}
+      className="rounded px-2 py-1.5 text-xs text-chrome-muted transition-colors hover:bg-chrome-hover hover:text-chrome-fg"
+      activeProps={{ className: "bg-chrome-hover text-chrome-fg" }}
     >
       {label}
     </Link>
@@ -132,7 +132,7 @@ export function BottomNav({
   return (
     <nav
       className={cx(
-        "border-t border-border bg-surface-2",
+        "border-t border-border bg-surface-2/95 backdrop-blur-sm",
         embedded ? "shrink-0" : "fixed inset-x-0 bottom-0 z-30 lg:hidden",
       )}
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
@@ -176,13 +176,17 @@ function NavTab({
     <Link
       to={to}
       activeOptions={{ exact: !!exact }}
-      className="relative flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] text-muted"
-      activeProps={{ className: "text-accent" }}
+      className={cx(
+        "relative flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] text-muted",
+        "transition-colors active:bg-hover",
+        "before:absolute before:inset-x-3 before:top-0 before:h-0.5 before:rounded-b before:bg-transparent",
+      )}
+      activeProps={{ className: "text-accent before:bg-accent" }}
     >
       <span className="relative">
         {icon}
         {badge !== undefined && badge > 0 && (
-          <span className="absolute -right-2.5 -top-2 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-white">
+          <span className="absolute -right-2.5 -top-2 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-danger-fg">
             {badge > 99 ? "99+" : badge}
           </span>
         )}

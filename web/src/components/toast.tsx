@@ -55,19 +55,29 @@ export function ToastHost({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             className={cx(
-              "pointer-events-auto flex w-full max-w-sm items-center gap-2 rounded border px-3 py-2 text-xs shadow-lg",
+              "rise pointer-events-auto flex w-full max-w-sm items-center gap-2 rounded-lg border py-1.5 pl-3 pr-1 text-xs shadow-2xl",
               "bg-surface-2 text-body",
+              // A hairline stripe down the leading edge, in the tone's colour:
+              // it survives a glance where a tinted border does not, and it does
+              // not tint the message itself.
               t.tone === "danger"
-                ? "border-danger/50"
+                ? "border-danger/40 shadow-danger/10"
                 : t.tone === "ok"
-                  ? "border-ok/50"
+                  ? "border-ok/40 shadow-ok/10"
                   : "border-border",
             )}
           >
-            <span className="flex-1">{t.message}</span>
+            <span
+              aria-hidden
+              className={cx(
+                "-my-1.5 mr-1 w-0.5 self-stretch rounded-full",
+                t.tone === "danger" ? "bg-danger" : t.tone === "ok" ? "bg-ok" : "bg-accent",
+              )}
+            />
+            <span className="min-w-0 flex-1 break-words py-1">{t.message}</span>
             {t.action && (
               <button
-                className="font-medium text-accent"
+                className="h-9 shrink-0 rounded px-2 font-medium text-accent transition-colors hover:bg-hover"
                 onClick={() => {
                   t.action?.run();
                   dismiss(t.id);
@@ -76,7 +86,11 @@ export function ToastHost({ children }: { children: ReactNode }) {
                 {t.action.label}
               </button>
             )}
-            <button aria-label="Dismiss" className="text-muted" onClick={() => dismiss(t.id)}>
+            <button
+              aria-label="Dismiss"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-hover hover:text-heading"
+              onClick={() => dismiss(t.id)}
+            >
               <X className="w-4 h-4" />
             </button>
           </div>

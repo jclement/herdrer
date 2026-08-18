@@ -36,10 +36,12 @@ export function AgentsPage() {
     <div>
       {/* A stale tree beats a blank screen; say how stale rather than hiding it. */}
       {error && (
-        <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
-          <WifiOff className="w-4 h-4" />
-          Showing the tree as of {new Date(dataUpdatedAt).toLocaleTimeString()} —{" "}
-          {describeError(error)}
+        <div className="flex items-start gap-2 border-b border-warn/40 bg-warn-weak px-3 py-2 text-xs text-warn">
+          <WifiOff className="mt-0.5 w-4 h-4 shrink-0" />
+          <span className="min-w-0 break-words">
+            Showing the tree as of {new Date(dataUpdatedAt).toLocaleTimeString()} —{" "}
+            {describeError(error)}
+          </span>
         </div>
       )}
 

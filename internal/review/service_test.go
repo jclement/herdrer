@@ -207,7 +207,7 @@ func TestRendererEscapesHostileMarkdown(t *testing.T) {
 // TestDocumentCarriesLockedDownCSP checks the policy the iframe relies on.
 func TestDocumentCarriesLockedDownCSP(t *testing.T) {
 	r := NewRenderer()
-	doc, err := r.Document("t", []Section{{Kind: "markdown", Content: "hello"}}, false)
+	doc, err := r.Document("t", []Section{{Kind: "markdown", Content: "hello"}}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestDocumentMatchesSPAContract(t *testing.T) {
 	doc, err := r.Document("t", []Section{
 		{ID: "at_abc", Kind: "diff", Title: "migration", Content: "--- a\n+++ b\n"},
 		{ID: "at_def", Kind: "mermaid", Content: "flowchart LR\n A-->B\n"},
-	}, false)
+	}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestDocumentMatchesSPAContract(t *testing.T) {
 func TestDocumentLoadsMermaidOnlyWhenNeeded(t *testing.T) {
 	r := NewRenderer()
 
-	plain, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, false)
+	plain, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestDocumentLoadsMermaidOnlyWhenNeeded(t *testing.T) {
 
 	withDiagram, err := r.Document("t", []Section{
 		{Kind: "mermaid", ID: "at_1", Content: "flowchart LR\n A-->B\n"},
-	}, false)
+	}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestHighlightEscapesHostileSource(t *testing.T) {
 // are invisible highlighting, which looks exactly like the feature not working.
 func TestDocumentCarriesTheHighlightStylesheet(t *testing.T) {
 	r := NewRenderer()
-	for _, dark := range []bool{false, true} {
+	for _, dark := range []Theme{ThemeLight, ThemeDark} {
 		doc, err := r.Document("t", []Section{
 			{Kind: "code", Language: "go", Content: "func main() {}", ID: "at_1"},
 		}, dark)
@@ -504,7 +504,7 @@ func TestImageRendersInlineAndMissingIsExplicit(t *testing.T) {
 	withImage, err := r.Document("t", []Section{{
 		Kind: "image", ID: "at_1", Title: "the failure",
 		ImageSrc: "data:image/png;base64,iVBORw0KGgo=",
-	}}, false)
+	}}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +515,7 @@ func TestImageRendersInlineAndMissingIsExplicit(t *testing.T) {
 		t.Error("caption lost")
 	}
 
-	missing, err := r.Document("t", []Section{{Kind: "image", ID: "at_2", Title: "gone"}}, false)
+	missing, err := r.Document("t", []Section{{Kind: "image", ID: "at_2", Title: "gone"}}, ThemeLight)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,9 @@ func TestImageRendersInlineAndMissingIsExplicit(t *testing.T) {
 // parameter is a document that will be wrong.
 func TestDocumentIsDarkWithoutBeingToldTo(t *testing.T) {
 	r := NewRenderer()
-	doc, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, false)
+	// ThemeAuto is the case under test: no theme asked for, so the document
+	// must follow the platform rather than assuming light.
+	doc, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, ThemeAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,12 +545,11 @@ func TestDocumentIsDarkWithoutBeingToldTo(t *testing.T) {
 	// Check the html tag, not the stylesheet: a :root[data-theme="light"] rule
 	// is required so an explicit light choice wins, but the *element* must
 	// carry no theme unless one was asked for.
-	htmlTag := doc[strings.Index(doc, "<html") : strings.Index(doc, ">")+1]
-	if strings.Contains(htmlTag, "data-theme") {
-		t.Errorf("the document hardcodes a theme (%s), losing the platform preference", htmlTag)
+	if strings.Contains(htmlTagOf(doc), "data-theme") {
+		t.Errorf("the document hardcodes a theme (%s), losing the platform preference", htmlTagOf(doc))
 	}
 	// An explicit dark request must still win.
-	dark, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, true)
+	dark, err := r.Document("t", []Section{{Kind: "markdown", Content: "# hi"}}, ThemeDark)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,6 +560,124 @@ func TestDocumentIsDarkWithoutBeingToldTo(t *testing.T) {
 	for _, want := range []string{`:root[data-theme="dark"] .chroma`, `@media (prefers-color-scheme: dark)`} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("stylesheet missing %q", want)
+		}
+	}
+}
+
+// TestFileDiffRendersAsADiffNotProse is the regression for a computed diff
+// being reflowed as a paragraph.
+//
+// The kind is deliberately kept as "filediff" in storage so the UI knows the
+// before/after originals exist — which means every place that switches on kind
+// has to know about it. The renderer did not, so the diff fell through to the
+// markdown branch and lost its monospace alignment entirely.
+func TestFileDiffRendersAsADiffNotProse(t *testing.T) {
+	r := NewRenderer()
+	unified := "--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n func main() {\n-\tprintln(\"old\")\n+\tprintln(\"new\")\n }\n"
+
+	doc, err := r.Document("t", []Section{
+		{Kind: "filediff", ID: "at_1", Title: "x.go  (+1 −1)", Language: "diff", Content: unified},
+	}, ThemeDark)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "<pre") {
+		t.Fatal("a filediff rendered without a <pre>; it would reflow as prose")
+	}
+	if strings.Contains(doc, `<section class="md"`) {
+		t.Error("a filediff went down the markdown branch")
+	}
+	if !strings.Contains(doc, "chroma") {
+		t.Error("a filediff was not syntax highlighted")
+	}
+}
+
+// TestThemeHasThreeStates is the regression for an app set to light on a
+// dark-mode phone still rendering a dark document.
+//
+// "light" was being treated as "no attribute", which is not the same thing:
+// absent means follow the platform, and the platform said dark. An explicit
+// choice has to win in both directions, or the in-app toggle only half works.
+func TestThemeHasThreeStates(t *testing.T) {
+	r := NewRenderer()
+	sections := []Section{{Kind: "markdown", Content: "# hi"}}
+
+	for _, tc := range []struct {
+		theme Theme
+		want  string
+	}{
+		{ThemeDark, `data-theme="dark"`},
+		{ThemeLight, `data-theme="light"`},
+	} {
+		doc, err := r.Document("t", sections, tc.theme)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(htmlTagOf(doc), tc.want) {
+			t.Errorf("theme %q produced %s, want %s", tc.theme, htmlTagOf(doc), tc.want)
+		}
+	}
+
+	// Auto must carry no attribute at all, so the stylesheet follows the OS.
+	doc, err := r.Document("t", sections, ThemeAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlTag := doc[strings.Index(doc, "<html") : strings.Index(doc, ">")+1]
+	if strings.Contains(htmlTag, "data-theme") {
+		t.Errorf("auto emitted a theme attribute: %s", htmlTag)
+	}
+
+	if ParseTheme("dark") != ThemeDark || ParseTheme("light") != ThemeLight ||
+		ParseTheme("") != ThemeAuto || ParseTheme("nonsense") != ThemeAuto {
+		t.Error("ParseTheme does not map the three states correctly")
+	}
+}
+
+// htmlTagOf extracts the opening <html …> tag.
+//
+// Naively slicing to the first ">" finds the one in <!doctype html>, which
+// comes first and yields an empty string — an assertion that then passes or
+// fails for the wrong reason.
+func htmlTagOf(doc string) string {
+	start := strings.Index(doc, "<html")
+	if start < 0 {
+		return ""
+	}
+	end := strings.IndexByte(doc[start:], '>')
+	if end < 0 {
+		return ""
+	}
+	return doc[start : start+end+1]
+}
+
+// TestDocumentCannotWidenPastTheViewport pins the three declarations that stop
+// the rendered document from being the thing that makes the page scroll
+// sideways, and from shouting over the question it is attached to.
+//
+// The document is server-rendered inside a sandboxed frame, so it inherits
+// nothing from the app: its type scale and its gutter are set here or nowhere.
+func TestDocumentCannotWidenPastTheViewport(t *testing.T) {
+	css := rendererCSS
+	for _, must := range []string{
+		"overflow-wrap:anywhere", // long tokens wrap instead of widening
+		"max-width:100%",         // a wide <pre> cannot exceed the frame
+		"overflow-x:auto",        // it scrolls inside its own box instead
+		"padding:2px 12px 8px",   // its own gutter, matching the app's inset
+	} {
+		if !strings.Contains(css, must) {
+			t.Errorf("renderer stylesheet is missing %q", must)
+		}
+	}
+
+	// The agent's headings must not outrank the item title. 15px is below the
+	// app's own title size, which is the whole point.
+	if !strings.Contains(css, "font-weight:600;font-size:15px") {
+		t.Error("agent headings are not clamped; an h2 will outshout the question")
+	}
+	for _, tooBig := range []string{"font-size:1.3rem", "font-size:1.15rem"} {
+		if strings.Contains(css, tooBig) {
+			t.Errorf("stylesheet still contains the oversized heading rule %q", tooBig)
 		}
 	}
 }

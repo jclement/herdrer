@@ -314,7 +314,7 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
               <button
                 key={i.id}
                 onClick={() => openItem(i.id)}
-                className="flex w-full items-start gap-2 px-3 py-3 text-left hover:bg-hover"
+                className="flex min-h-14 w-full items-start gap-2 px-3 py-3 text-left transition-colors hover:bg-hover"
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-heading">{i.title}</div>
@@ -336,7 +336,7 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
           <Link
             to="/inbox"
             onClick={() => setStackOpen(false)}
-            className="inline-flex items-center gap-1 text-xs text-accent"
+            className="inline-flex min-h-11 items-center gap-1 text-xs text-accent"
           >
             <Layers className="w-3.5 h-3.5" />
             Open the full inbox — answered, expired and all
@@ -381,12 +381,14 @@ function PeekStrip({
     >
       <div
         className={cx(
-          "mx-auto flex w-full max-w-2xl items-center gap-2 rounded border bg-surface-2 px-2 py-1.5 shadow-lg",
+          "drop mx-auto flex w-full max-w-2xl items-center gap-2 rounded-lg border bg-surface-2/95 py-1.5 pl-2 pr-1.5 shadow-2xl backdrop-blur-sm",
           blocking ? "border-danger/60" : "border-border",
         )}
       >
-        <Bell className={cx("w-4 h-4 shrink-0", blocking ? "text-danger" : "text-accent")} />
-        <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <Bell
+          className={cx("w-4 h-4 shrink-0", blocking ? "breathe text-danger" : "text-accent")}
+        />
+        <button onClick={onOpen} className="min-h-11 min-w-0 flex-1 py-1 text-left">
           <div className="truncate text-xs font-medium text-heading">{title}</div>
           <div className="text-[11px] text-muted">
             {blocking ? "blocking · " : ""}
@@ -395,11 +397,14 @@ function PeekStrip({
         </button>
         <button
           onClick={onOpen}
-          className="h-9 shrink-0 rounded border border-accent px-2 text-xs font-medium text-accent"
+          className="h-11 shrink-0 rounded-md border border-accent bg-accent-weak px-3 text-xs font-medium text-accent transition-colors active:scale-[0.98]"
         >
           Read
         </button>
-        <button onClick={onLater} className="h-9 shrink-0 px-2 text-xs text-muted">
+        <button
+          onClick={onLater}
+          className="h-11 shrink-0 rounded-md px-2.5 text-xs text-muted transition-colors hover:bg-hover"
+        >
           Later
         </button>
       </div>

@@ -65,10 +65,7 @@ export async function readPushHealth(): Promise<PushHealth> {
 
 /** Resolves to null rather than hanging or throwing. */
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
-  return Promise.race([
-    p,
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
-  ]);
+  return Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
 }
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {

@@ -273,24 +273,44 @@ export function postHeight(doc: Document, target: Window | null): void {
   target.postMessage({ type: HEIGHT_MESSAGE, height: h }, "*");
 }
 
-/** Styles for the rendered diagrams, reusing the document's theme variables. */
+/**
+ * Styles for the rendered diagrams, reusing the document's theme variables.
+ *
+ * This runs *inside* the sandboxed review document, which is a different
+ * document with a different stylesheet — the server's. So the colours come from
+ * that document's own custom properties (`--border`, `--code-bg`, `--muted`,
+ * `--del`) and this file only supplies the fallback for when one is missing.
+ *
+ * Those fallbacks used to be light literals, and that was a real dark-mode leak
+ * rather than a theoretical one: a `background:var(--code-bg,#f6f8fa)` renders a
+ * pale grey panel in the middle of a dark document the moment the host page
+ * does not happen to define that variable. A fallback has to be as theme-aware
+ * as the thing it is standing in for, so the fallbacks are themselves
+ * variables, resolved by the same three-state rule the host document uses:
+ * `prefers-color-scheme` by default, an explicit `data-theme` winning over it
+ * in both directions.
+ */
 export const FRAME_CSS = `
+:root{--mmd-border:#d0d7de;--mmd-code-bg:#f6f8fa;--mmd-muted:#656d76;--mmd-del:#cf222e}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+--mmd-border:#30363d;--mmd-code-bg:#161b22;--mmd-muted:#8b949e;--mmd-del:#f85149}}
+:root[data-theme=dark]{--mmd-border:#30363d;--mmd-code-bg:#161b22;--mmd-muted:#8b949e;--mmd-del:#f85149}
 .mermaid-figure{margin:0 0 1em}
 .mermaid-viewport{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .mermaid-figure[data-zoom=fit] .mermaid-viewport{max-width:var(--mmd-natural,100%);overflow:hidden;cursor:zoom-in}
 .mermaid-figure[data-zoom=pan] .mermaid-viewport{overflow:auto;max-height:60vh;min-height:120px;
-border:1px solid var(--border,#d0d7de);border-radius:6px;background:var(--code-bg,#f6f8fa)}
+border:1px solid var(--border,var(--mmd-border));border-radius:6px;background:var(--code-bg,var(--mmd-code-bg))}
 .mermaid-figure svg{display:block;height:auto}
 .mermaid-figure[data-zoom=pan] svg{max-width:none}
 .mermaid-tools{display:flex;gap:.3em;align-items:center;margin-top:.3em;
-font-size:.7rem;color:var(--muted,#656d76)}
-.mermaid-tools button{font:inherit;color:inherit;background:var(--code-bg,#f6f8fa);
-border:1px solid var(--border,#d0d7de);border-radius:5px;padding:.2em .5em;
+font-size:.7rem;color:var(--muted,var(--mmd-muted))}
+.mermaid-tools button{font:inherit;color:inherit;background:var(--code-bg,var(--mmd-code-bg));
+border:1px solid var(--border,var(--mmd-border));border-radius:5px;padding:.2em .5em;
 min-width:2.2em;min-height:1.9em;line-height:1;cursor:pointer}
 .mermaid-tools button[disabled]{opacity:.45;cursor:default}
 .mermaid-zoom-label{min-width:3em;text-align:center;font-variant-numeric:tabular-nums}
-.mermaid-error{font-size:.75rem;line-height:1.4;color:var(--del,#cf222e);margin:0 0 .3em}
-pre.mermaid-unrendered{border-color:var(--del,#cf222e)}
+.mermaid-error{font-size:.75rem;line-height:1.4;color:var(--del,var(--mmd-del));margin:0 0 .3em}
+pre.mermaid-unrendered{border-color:var(--del,var(--mmd-del))}
 `;
 
 /** Adds FRAME_CSS to the document. Inline styles are what the CSP permits. */

@@ -616,3 +616,100 @@ func TestNonImageUploadIsRefused(t *testing.T) {
 		t.Fatalf("a shell script was accepted as an image: %d", w.Code)
 	}
 }
+
+// TestSuppressAuthRefusesNonLoopbackPeer is the second gate on the dev bypass.
+//
+// config.Load already refuses to start with SUPPRESS_AUTH on a non-loopback
+// listener. This asserts the middleware re-checks the peer anyway, because this
+// branch disables every other authentication check in the process — two
+// independent conditions have to be wrong before it opens a shell, not one.
+func TestSuppressAuthRefusesNonLoopbackPeer(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	s.cfg.SuppressAuth = true
+
+	for _, remote := range []string{"203.0.113.7:9999", "10.0.0.5:1234", "[2001:db8::1]:443"} {
+		r := httptest.NewRequest("GET", "/api/v1/bootstrap", nil)
+		r.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("SUPPRESS_AUTH from %s: got %d, want 401", remote, w.Code)
+		}
+	}
+
+	// And a forged header must not be able to fake loopback.
+	r := httptest.NewRequest("GET", "/api/v1/bootstrap", nil)
+	r.RemoteAddr = "203.0.113.7:9999"
+	r.Header.Set("X-Forwarded-For", "127.0.0.1")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("a forged X-Forwarded-For satisfied the loopback check: %d", w.Code)
+	}
+}
+
+// TestSuppressAuthWorksOnLoopback keeps local development frictionless, which
+// is the entire reason the flag exists.
+func TestSuppressAuthWorksOnLoopback(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	s.cfg.SuppressAuth = true
+
+	r := httptest.NewRequest("GET", "/api/v1/bootstrap", nil)
+	r.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("loopback with SUPPRESS_AUTH: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"handle":"dev"`) {
+		t.Errorf("no dev user in %s", w.Body.String())
+	}
+	// Step-up must be satisfied, or the terminal is unusable in development.
+	if !strings.Contains(w.Body.String(), `"stepped_up":true`) {
+		t.Error("SUPPRESS_AUTH did not satisfy step-up; the dev terminal would prompt for a passkey")
+	}
+}
+
+// TestTerminalWorksUnderSuppressAuth catches a self-inflicted break in the dev
+// bypass: the synthetic session stamps a credential id that has no row, so the
+// permission lookup returned ErrNotFound and the terminal 500'd. Local
+// development is the whole reason the flag exists; a dev terminal that cannot
+// open makes it useless.
+func TestTerminalWorksUnderSuppressAuth(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	s.cfg.SuppressAuth = true
+
+	r := req("POST", "/api/v1/terminal/ticket")
+	r.RemoteAddr = "127.0.0.1:5555"
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("terminal ticket under SUPPRESS_AUTH: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDeletedCredentialClosesTheTerminalCleanly — revoking a passkey should
+// close the terminal, and say so. A 500 sends the operator hunting a fault that
+// is really a revocation working as designed.
+func TestDeletedCredentialClosesTheTerminalCleanly(t *testing.T) {
+	s, st, u := newTestServer(t)
+	ctx := context.Background()
+	cookie, sessID := loginAsWithID(t, s, u)
+
+	// Step up against a credential id that does not exist, standing in for one
+	// deleted between the assertion and the ticket request.
+	if err := st.MarkSessionSteppedUp(ctx, sessID, "cred-since-deleted"); err != nil {
+		t.Fatal(err)
+	}
+	r := req("POST", "/api/v1/terminal/ticket")
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+
+	if w.Code == http.StatusInternalServerError {
+		t.Fatal("a deleted credential produced a 500 rather than a refusal")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403", w.Code)
+	}
+}

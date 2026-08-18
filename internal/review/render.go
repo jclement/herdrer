@@ -131,7 +131,32 @@ type Section struct {
 // opaque origin, where `'self'` matches nothing — so scripts are admitted by
 // nonce with 'strict-dynamic', which is origin-independent, and everything
 // else is denied outright.
-func (r *Renderer) Document(title string, sections []Section, dark bool) (string, error) {
+// Theme is what the caller asked for. Absent is a first-class state, not a
+// synonym for light: it means "follow the platform", which is what the
+// stylesheet does on its own.
+type Theme string
+
+// The three states.
+const (
+	ThemeAuto  Theme = ""
+	ThemeLight Theme = "light"
+	ThemeDark  Theme = "dark"
+)
+
+// ParseTheme maps a query parameter to a Theme, defaulting to auto.
+func ParseTheme(v string) Theme {
+	switch v {
+	case "dark":
+		return ThemeDark
+	case "light":
+		return ThemeLight
+	default:
+		return ThemeAuto
+	}
+}
+
+func (r *Renderer) Document(title string, sections []Section, theme Theme) (string, error) {
+	dark := theme == ThemeDark
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
@@ -171,9 +196,14 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 				body.WriteString("<figcaption>" + html2.EscapeString(s.Title) + "</figcaption>")
 			}
 			body.WriteString(`<pre class="mermaid">` + html2.EscapeString(s.Content) + `</pre></figure>`)
-		case "code", "diff":
+		// "filediff" renders exactly like "diff" — the kind is kept distinct in
+		// storage so the UI knows the before/after originals exist and can
+		// offer to expand past the hunks. Omitting it here sent a computed
+		// unified diff down the markdown branch, which reflowed it as prose:
+		// monospace alignment gone, +/- lines run together into a paragraph.
+		case "code", "diff", "filediff":
 			lang := s.Language
-			if lang == "" && s.Kind == "diff" {
+			if lang == "" && (s.Kind == "diff" || s.Kind == "filediff") {
 				lang = "diff"
 			}
 			// Highlighted output is chroma's, generated from source it escapes
@@ -202,9 +232,13 @@ func (r *Renderer) Document(title string, sections []Section, dark bool) (string
 
 	// No data-theme unless one was asked for: the stylesheet then follows the
 	// platform, which is right far more often than guessing light.
+	//
+	// Emitting the attribute for light as well as dark is what makes an in-app
+	// toggle work in both directions. Treating light as "no attribute" meant an
+	// app set to light on a dark-mode phone still got a dark document.
 	themeAttr := ""
-	if dark {
-		themeAttr = ` data-theme="dark"`
+	if theme != ThemeAuto {
+		themeAttr = ` data-theme="` + string(theme) + `"`
 	}
 	doc := `<!doctype html><html lang="en"` + themeAttr + `><head>
 <meta charset="utf-8">
@@ -291,9 +325,21 @@ const rendererCSS = `
 --code-bg:#f6f8fa;--add:#1a7f37;--add-bg:#e6ffec;--del:#cf222e;--del-bg:#ffebe9}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg)}
-body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;padding:2px 0 8px}
-h1,h2,h3,h4{line-height:1.25;margin:1.2em 0 .5em;font-weight:600}
-h1{font-size:1.3rem}h2{font-size:1.15rem}h3{font-size:1rem}
+/* Padding, not margin: the frame is sized to the height this document posts,
+   so the document owns its own gutter. Without it the agent's prose sits flush
+   at x=0 while every element of the app around it is inset, which reads as a
+   seam where the app ends and something else begins. */
+body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
+padding:2px 12px 8px;overflow-wrap:anywhere}
+
+/* The agent's headings must not outrank the item title above them.
+   An agent writing "## What's happening" was rendering ~1.7x larger than the
+   actual question on the page, so the loudest thing on screen was the agent's
+   section header rather than the decision. These are section labels inside
+   someone else's page, and they are sized as such. */
+h1,h2,h3,h4{line-height:1.3;margin:1.15em 0 .4em;font-weight:600;font-size:15px}
+h1{font-size:16px}
+h1:first-child,h2:first-child,h3:first-child{margin-top:0}
 p,ul,ol,blockquote,table{margin:0 0 .8em}
 ul,ol{padding-left:1.3em}
 a{color:inherit;text-decoration:underline;text-underline-offset:2px}
@@ -305,9 +351,14 @@ th,td{border:1px solid var(--border);padding:.25em .5em;text-align:left;font-siz
 th{background:var(--code-bg)}
 code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em}
 :not(pre)>code{background:var(--code-bg);padding:.1em .3em;border-radius:3px}
+/* Code scrolls inside its own box; the page never does. overscroll-behavior
+   stops a horizontal swipe in a diff from chaining into Safari's back gesture. */
 pre{background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
 padding:.6em .7em;overflow-x:auto;overscroll-behavior-x:contain;margin:0 0 .8em;
--webkit-overflow-scrolling:touch}
+max-width:100%;-webkit-overflow-scrolling:touch}
+/* Long unbroken strings — a URL, a branch name, a base64 blob — must wrap
+   rather than widen the document past the viewport. */
+p,li,td,th,figcaption{overflow-wrap:anywhere}
 pre code{white-space:pre;display:block}
 .lang-diff code{white-space:pre}
 figure{margin:0 0 1em}

@@ -42,10 +42,12 @@ export function InboxPage() {
     <div>
       {/* An error with cached rows is a staleness banner, not an error page. */}
       {error && data && (
-        <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
-          <WifiOff className="w-4 h-4" />
-          Showing what was here at {new Date(dataUpdatedAt).toLocaleTimeString()} —{" "}
-          {describeError(error)}
+        <div className="flex items-start gap-2 border-b border-warn/40 bg-warn-weak px-3 py-2 text-xs text-warn">
+          <WifiOff className="mt-0.5 w-4 h-4 shrink-0" />
+          <span className="min-w-0 break-words">
+            Showing what was here at {new Date(dataUpdatedAt).toLocaleTimeString()} —{" "}
+            {describeError(error)}
+          </span>
         </div>
       )}
 
@@ -79,10 +81,11 @@ export function InboxPage() {
         return (
           <section key={band}>
             <SectionHeader
+              sticky
               title={
                 band === 3 ? (
                   <button
-                    className="flex items-center gap-1"
+                    className="-my-1.5 flex min-h-9 items-center gap-1 py-1.5"
                     onClick={() => setShowStale((v) => !v)}
                     aria-expanded={!collapsed}
                   >
@@ -112,9 +115,10 @@ export function InboxPage() {
       {groups.answered.length > 0 && (
         <section>
           <SectionHeader
+            sticky
             title={
               <button
-                className="flex items-center gap-1"
+                className="-my-1.5 flex min-h-9 items-center gap-1 py-1.5"
                 onClick={() => setShowAnswered((v) => !v)}
                 aria-expanded={showAnswered}
               >
@@ -138,17 +142,21 @@ export function InboxPage() {
       )}
 
       {isFetching && !isPending && (
-        <div className="px-3 py-2 text-[11px] text-muted">refreshing…</div>
+        <div className="breathe px-3 py-2 text-[11px] text-muted">refreshing…</div>
       )}
 
       {/* Compose a task — the reverse channel. Human session only. */}
       <button
         onClick={() => setComposing(true)}
         aria-label="Queue a task for an agent"
-        className="fixed right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-accent-fg shadow-lg lg:right-8"
-        style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)" }}
+        className={
+          "fixed right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full " +
+          "bg-accent text-accent-fg shadow-2xl ring-1 ring-accent/40 " +
+          "transition-transform active:scale-95 lg:right-8 lg:h-12 lg:w-12"
+        }
+        style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 4.75rem)" }}
       >
-        <Plus className="w-5 h-5" />
+        <Plus className="w-6 h-6 lg:w-5 lg:h-5" />
       </button>
 
       <TaskComposer open={composing} onClose={() => setComposing(false)} />

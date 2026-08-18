@@ -69,12 +69,15 @@ export function ItemPage() {
   const answerable = isAnswerable(item);
 
   return (
-    <div className="pb-40">
+    <div className="pb-[calc(env(safe-area-inset-bottom,0px)+10rem)]">
       <ReviewBody item={item} selected={answering.selected} onSelect={answering.setSelected} />
 
       {!answerable && (
         <div className="px-3 pb-4">
-          <Link to="/inbox" className="text-xs text-accent underline">
+          <Link
+            to="/inbox"
+            className="inline-flex min-h-11 items-center text-xs text-accent underline underline-offset-2"
+          >
             Back to the inbox
           </Link>
         </div>
@@ -94,7 +97,13 @@ export function ItemPage() {
       )}
 
       <Sheet open={moreOpen} title="More" onClose={() => setMoreOpen(false)}>
-        <div className="divide-y divide-border">
+        {/*
+          Order is a safety property here. Copy-link and open-terminal are the
+          two anyone reaches for; Dismiss cancels the item and tells the agent
+          nothing was decided, so it sits last, behind a confirm, furthest from
+          where a thumb lands when the sheet rises.
+        */}
+        <div className="divide-y divide-border pb-2">
           <SheetAction
             icon={<Link2 className="w-4 h-4" />}
             label="Copy link to this item"
@@ -134,7 +143,7 @@ export function ItemPage() {
             }}
           />
           <SheetAction
-            icon={<Trash2 className="w-4 h-4 text-danger" />}
+            icon={<Trash2 className="w-4 h-4" />}
             label="Dismiss this item"
             detail="Cancels it. The agent is told nothing was decided."
             danger
@@ -172,9 +181,12 @@ function SheetAction({
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-hover"
+      className={cx(
+        "flex min-h-14 w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-hover",
+        danger && "hover:bg-danger-weak",
+      )}
     >
-      <span className="mt-0.5 shrink-0 text-muted">{icon}</span>
+      <span className={cx("mt-0.5 shrink-0", danger ? "text-danger" : "text-muted")}>{icon}</span>
       <span className="min-w-0 flex-1">
         <span className={cx("block text-sm", danger ? "text-danger" : "text-heading")}>
           {label}

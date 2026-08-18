@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -140,10 +142,43 @@ func portOf(u *url.URL) string {
 	return "80"
 }
 
+// devUserID is the well-known developer identity used under SUPPRESS_AUTH.
+// All-zero so it is unmistakable in a database or an audit log.
+const devUserID = "00000000-0000-0000-0000-000000000000"
+
 // requireSession gates the human route tree. Nothing reaches a handler behind
 // this middleware without a live session backed by a passkey assertion.
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.SuppressAuth {
+			// Second gate, independent of the first. config.Load already
+			// refuses to start with SUPPRESS_AUTH on a non-loopback listener,
+			// but the whole point of this branch is that it disables every
+			// other check — so it re-verifies the peer here rather than
+			// trusting that startup validation was correct. Two independent
+			// conditions have to be wrong before this opens a shell.
+			if !isLoopbackPeer(r) {
+				slog.Error("SUPPRESS_AUTH request from a non-loopback peer, refusing",
+					"remote", r.RemoteAddr)
+				Unauthorized(w)
+				return
+			}
+			u, err := s.devUser(r.Context())
+			if err != nil {
+				Internal(w, err, "dev user")
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxUser, u)
+			ctx = context.WithValue(ctx, ctxSession, &store.Session{
+				ID: "dev-session", UserID: u.ID,
+				// Stamped now, so step-up is satisfied and the terminal is
+				// usable in development without an authenticator.
+				SteppedUpAt: ptrTime(time.Now()), SteppedUpCred: "dev-credential",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		sess, u, err := s.auth.SessionFromRequest(r.Context(), r)
 		if err != nil {
 			Unauthorized(w)
@@ -262,6 +297,41 @@ func chain(h http.Handler, mw ...func(http.Handler) http.Handler) http.Handler {
 		h = mw[i](h)
 	}
 	return h
+}
+
+// isLoopbackPeer reports whether the request came from this machine.
+//
+// Deliberately reads RemoteAddr and never X-Forwarded-For: a header is
+// attacker-controlled, and this is the one check standing between
+// SUPPRESS_AUTH and an open shell.
+func isLoopbackPeer(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
+
+// devUser fetches or creates the well-known development identity.
+func (s *Server) devUser(ctx context.Context) (*store.User, error) {
+	if u, err := s.st.GetUser(ctx, devUserID); err == nil {
+		return u, nil
+	}
+	u := &store.User{
+		ID: devUserID, Handle: "dev", DisplayName: "Developer",
+		Role: "admin", CreatedAt: time.Now(),
+	}
+	if err := s.st.CreateUser(ctx, u); err != nil {
+		// A concurrent request may have won the race; re-read before failing.
+		if existing, gerr := s.st.GetUser(ctx, devUserID); gerr == nil {
+			return existing, nil
+		}
+		return nil, err
+	}
+	return u, nil
 }
 
 func clientIP(r *http.Request) string {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jclement/herdrer/internal/auth"
 	"github.com/jclement/herdrer/internal/notify"
+	"github.com/jclement/herdrer/internal/store"
 	"github.com/jclement/herdrer/internal/terminal"
 )
 
@@ -63,10 +64,24 @@ func (s *Server) handleTerminalTicket(w http.ResponseWriter, r *http.Request) {
 	// The credential that satisfied the step-up is the one whose permission
 	// counts, not whichever key happened to create the session. A phone marked
 	// review-only stays review-only even while holding a valid session.
-	allowed, err := s.st.CredentialCanTerminal(r.Context(), u.ID, sess.SteppedUpCred)
-	if err != nil {
-		Internal(w, err, "credential permission")
-		return
+	//
+	// Under SUPPRESS_AUTH there is no real credential to consult — the dev
+	// session is synthetic — so the check is skipped rather than looking up an
+	// id that cannot exist.
+	allowed := s.cfg.SuppressAuth
+	if !s.cfg.SuppressAuth {
+		var err error
+		allowed, err = s.st.CredentialCanTerminal(r.Context(), u.ID, sess.SteppedUpCred)
+		if errors.Is(err, store.ErrNotFound) {
+			// The credential that stepped up has since been removed. That is
+			// "not permitted", not "the server is broken": deleting a passkey
+			// should close the terminal, and a 500 here would send the operator
+			// hunting a fault that is really a revocation working correctly.
+			allowed = false
+		} else if err != nil {
+			Internal(w, err, "credential permission")
+			return
+		}
 	}
 	if !allowed {
 		s.audit(r, "terminal.denied_by_credential", sess.SteppedUpCred, nil)

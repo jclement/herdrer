@@ -59,7 +59,7 @@ export function ActionBar({
   return (
     <div
       style={anchored ? { ...keyboardAnchoredStyle(vv), zIndex: 30 } : undefined}
-      className="shrink-0 border-t border-border bg-surface-2"
+      className="shrink-0 border-t border-border bg-surface-2/95 backdrop-blur-sm"
     >
       <div
         className="mx-auto w-full max-w-3xl px-2 py-2"
@@ -81,7 +81,7 @@ export function ActionBar({
             placeholder={
               freeText ? "Your answer…" : "A note. This outranks the button — say what you mean."
             }
-            className={cx(inputClass, "mb-2 resize-none text-sm")}
+            className={cx(inputClass, "mb-2 resize-none text-sm leading-relaxed")}
             autoCapitalize="sentences"
             spellCheck
           />
@@ -96,8 +96,10 @@ export function ActionBar({
                 window.setTimeout(() => noteRef.current?.focus(), 30);
               }}
               className={cx(
-                "flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-border",
-                note.trim() ? "text-accent" : "text-muted",
+                "flex h-11 w-11 shrink-0 items-center justify-center rounded-md border transition-colors",
+                note.trim()
+                  ? "border-accent/50 bg-accent-weak text-accent"
+                  : "border-border text-muted hover:bg-hover",
               )}
             >
               <MessageSquarePlus className="w-4 h-4" />
@@ -105,11 +107,11 @@ export function ActionBar({
           )}
 
           {collapsed ? (
-            <div className="min-w-0 flex-1 truncate rounded-md border border-border px-2 py-2 text-xs text-muted">
+            <div className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-md border border-border bg-surface px-2 text-xs text-muted">
               {selected ? `Selected: ${optionLabel(item, selected)}` : "Nothing selected yet"}
             </div>
           ) : freeText ? (
-            <div className="min-w-0 flex-1 text-xs text-muted">
+            <div className="min-w-0 flex-1 text-xs leading-snug text-muted">
               Free text. The agent reads this.
             </div>
           ) : (
@@ -125,13 +127,20 @@ export function ActionBar({
                     aria-pressed={isSel}
                     className={cx(
                       "h-11 shrink-0 whitespace-nowrap rounded-md border px-3 text-sm font-medium",
+                      "transition-[background-color,border-color,color] duration-150 active:scale-[0.98]",
                       isSel
-                        ? "border-accent bg-accent text-accent-fg"
+                        ? "border-accent bg-accent text-accent-fg shadow-sm"
                         : isRec
-                          ? "border-accent text-accent"
-                          : "border-border text-heading",
+                          ? "border-accent/60 bg-accent-weak text-accent"
+                          : "border-border bg-surface text-heading hover:bg-hover",
                     )}
                   >
+                    {isRec && !isSel && (
+                      <span
+                        aria-hidden
+                        className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+                      />
+                    )}
                     {opt.label}
                   </button>
                 );
@@ -154,7 +163,7 @@ export function ActionBar({
           <button
             aria-label="More actions"
             onClick={onMore}
-            className="flex h-11 w-9 shrink-0 items-center justify-center rounded-md text-muted"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-heading"
           >
             <MoreHorizontal className="w-4 h-4" />
           </button>

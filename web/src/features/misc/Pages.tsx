@@ -5,9 +5,11 @@ import { Button } from "../../components/ui";
 
 export function NotFound() {
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <Compass className="w-6 h-6 text-muted" />
-      <div className="font-mono text-2xl text-heading">404</div>
+    <div className="fade flex flex-col items-center gap-3 px-6 py-16 text-center">
+      <span className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-surface-2 text-muted">
+        <Compass className="w-6 h-6" />
+      </span>
+      <div className="font-mono text-3xl font-semibold tracking-tight text-heading">404</div>
       <p className="max-w-xs text-sm text-body">
         Nothing at this address. Either the item was reaped, or a URL got typed from memory.
       </p>
@@ -22,13 +24,15 @@ export function NotFound() {
 export function RouteError({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : String(error);
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <Bug className="w-6 h-6 text-danger" />
-      <div className="font-mono text-2xl text-heading">500</div>
+    <div className="fade flex flex-col items-center gap-3 px-6 py-16 text-center">
+      <span className="flex h-14 w-14 items-center justify-center rounded-full border border-danger/40 bg-danger-weak text-danger">
+        <Bug className="w-6 h-6" />
+      </span>
+      <div className="font-mono text-3xl font-semibold tracking-tight text-heading">500</div>
       <p className="max-w-xs text-sm text-body">
         The screen fell over. The box is probably fine; this part of the app is not.
       </p>
-      <pre className="max-w-full overflow-x-auto rounded border border-border bg-surface-2 p-2 text-left font-mono text-[11px] text-muted">
+      <pre className="scroll-x max-w-full rounded-md border border-border bg-surface-2 p-2 text-left font-mono text-[11px] text-muted">
         {message}
       </pre>
       <Button onClick={() => window.location.reload()}>Reload</Button>

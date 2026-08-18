@@ -7,7 +7,18 @@
 export type ReviewKind = "confirm" | "choice" | "ack" | "manual" | "review";
 export type Urgency = "low" | "normal" | "blocking";
 export type ReviewStatus = "open" | "answered" | "expired" | "cancelled";
-export type AttachmentKind = "diff" | "code" | "markdown" | "mermaid";
+/**
+ * `image` and `filediff` are newer than the rest and both render *inside* the
+ * sandboxed document rather than out here — an image is inlined as a data URI,
+ * and a filediff is a unified diff the server computed from the two whole files
+ * the agent sent. The page's own chrome still has to count them and offer a way
+ * to jump to them, which is what lib/attachments.ts is for.
+ *
+ * The union stays open at the end: a server that grows a seventh kind should
+ * make this UI show a row that says so, not crash and not silently drop it.
+ */
+export type AttachmentKind =
+  "diff" | "code" | "markdown" | "mermaid" | "image" | "filediff" | (string & {});
 
 export interface User {
   id: string;
@@ -54,7 +65,22 @@ export interface Attachment {
   kind: AttachmentKind;
   title: string;
   language?: string;
-  content: string;
+  /**
+   * Optional because two of the kinds do not have one. An `image` carries an
+   * asset reference the document inlines, and a `filediff` may arrive as its
+   * two originals with the server's computed diff alongside.
+   */
+  content?: string;
+  /** `image`: the uploaded asset the document inlines as a data URI. */
+  asset_id?: string;
+  media_type?: string;
+  /** `filediff`: the originals, kept so the reader can expand past the hunks. */
+  before?: string;
+  after?: string;
+  context?: number;
+  /** `diff` / `filediff`: the server's line counts, when it sends them. */
+  adds?: number;
+  dels?: number;
 }
 
 export interface ReviewItem {

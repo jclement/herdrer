@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useResolvedTheme } from "../../lib/theme";
 
 /**
  * Agent-authored markdown is hostile input, and the agent that wrote it may
@@ -11,8 +12,20 @@ import { useEffect, useRef, useState } from "react";
  * The frame reports its height by postMessage. We validate the sender is that
  * frame, that the origin is the opaque "null", and that the payload is the
  * shape we expect, before believing a pixel of it.
+ *
+ * The one thing that sandbox costs us is styling: the document cannot read our
+ * `.dark` class, our custom properties, or our localStorage, and left alone it
+ * follows `prefers-color-scheme` — the *operating system*. Our theme has three
+ * states and the OS has two, so the two disagree constantly: an OS in light
+ * mode with the app toggled to dark rendered a white page inside a dark app,
+ * which is the "it's a white background" everyone reported. `?theme=` is the
+ * whole fix, and it is a query parameter rather than a message because the
+ * palette has to be right in the *first* paint, not one round trip later.
  */
 const MAX_HEIGHT = 20000;
+
+/** What an unsized frame occupies while it decides how tall it is. */
+const INITIAL_HEIGHT = 240;
 
 export interface DocumentFrameProps {
   /** Same-origin URL of the server-rendered document. */
@@ -23,10 +36,25 @@ export interface DocumentFrameProps {
   className?: string;
 }
 
+/**
+ * Add `theme` to a render URL, keeping any fragment behind it.
+ *
+ * Exported for the test: the fragment is how an attachment card anchors the
+ * document at its own section, and a naive `src + "?theme=..."` would land the
+ * parameter inside the fragment and be silently ignored by the server.
+ */
+export function withTheme(src: string, theme: "light" | "dark"): string {
+  const url = new URL(src, window.location.origin);
+  url.searchParams.set("theme", theme);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 export function DocumentFrame({ src, title, maxHeight, className }: DocumentFrameProps) {
+  const theme = useResolvedTheme();
   const ref = useRef<HTMLIFrameElement | null>(null);
-  const [height, setHeight] = useState(240);
+  const [height, setHeight] = useState(INITIAL_HEIGHT);
   const [failed, setFailed] = useState(false);
+  const themed = withTheme(src, theme);
 
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
@@ -46,9 +74,17 @@ export function DocumentFrame({ src, title, maxHeight, className }: DocumentFram
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  /*
+   * Toggling the theme reloads the frame, and the reloaded document posts its
+   * height again a moment later. We deliberately keep the old height across
+   * that gap rather than resetting: the two renders are the same document in
+   * two palettes, so the height is right, and collapsing to 240px and springing
+   * back is a worse answer to a theme toggle than doing nothing visible at all.
+   */
+
   if (failed) {
     return (
-      <div className="m-3 rounded border border-border bg-surface-2 p-3 text-xs text-muted">
+      <div className="m-3 rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
         The rendered document didn't load. The raw markdown is below.
       </div>
     );
@@ -58,7 +94,7 @@ export function DocumentFrame({ src, title, maxHeight, className }: DocumentFram
     <iframe
       ref={ref}
       title={title}
-      src={src}
+      src={themed}
       // No allow-same-origin: that is the whole point.
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"

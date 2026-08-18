@@ -159,7 +159,8 @@ func (s *Server) handleRenderReview(w http.ResponseWriter, r *http.Request) {
 		sections = append(sections, sec)
 	}
 
-	doc, err := s.review.Renderer().Document(it.Title, sections, r.URL.Query().Get("theme") == "dark")
+	doc, err := s.review.Renderer().Document(it.Title, sections,
+		review.ParseTheme(r.URL.Query().Get("theme")))
 	if err != nil {
 		Internal(w, err, "render review")
 		return

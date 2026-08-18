@@ -582,6 +582,18 @@ export function TerminalPage() {
     void putImage(file);
   };
 
+  const headerRef = useRef<HTMLElement | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(40);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const measure = () => setHeaderHeight(el.offsetHeight || 40);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   /*
    * How much of the viewport is not terminal.
    *
@@ -592,65 +604,78 @@ export function TerminalPage() {
    * not height.
    */
   const chrome = desktop ? 0 : interactive ? 96 : 48 + 56; // key bar, or read-only bar plus nav
+  /*
+   * The header is measured, not assumed.
+   *
+   * It used to be a literal 40 here, matching the `h-10` on the bar — which was
+   * only true because the safe-area inset was applied to the *same* element as
+   * that height, so a notched phone silently clamped the content box to zero
+   * and rendered the header's own buttons below the bar. With the inset moved
+   * to a wrapper (where it belongs) the header is 40px plus the inset, and the
+   * inset is a number only the engine knows. So ask it.
+   */
   const termHeight = Math.max(
     120,
-    vv.height - 40 - chrome - (paneHint ? 28 : 0) - (imagePaste ? 36 : 0),
+    vv.height - headerHeight - chrome - (paneHint ? 28 : 0) - (imagePaste ? 36 : 0),
   );
 
   return (
     <div className="fixed inset-0 flex flex-col bg-surface" style={{ height: vv.height }}>
       <header
-        className="flex h-10 shrink-0 items-center gap-2 bg-chrome px-2 text-chrome-fg"
+        ref={headerRef}
+        className="shrink-0 border-b border-chrome-border bg-chrome text-chrome-fg"
         style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
-        <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
-        {/* The desktop's navigation. Below `lg` it renders nothing and the
+        <div className="flex h-10 items-center gap-2 px-2">
+          <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
+          {/* The desktop's navigation. Below `lg` it renders nothing and the
             bottom nav is the navigation instead. */}
-        <HeaderNav />
-        {/* The default session is the common case and needs no label; a named
+          <HeaderNav />
+          {/* The default session is the common case and needs no label; a named
             one does, because it is a different herdr server entirely. */}
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
-          {session}
-        </span>
-        <span
-          className={cx(
-            "shrink-0 rounded border px-1.5 py-0.5 text-[10px]",
-            phase === "open"
-              ? "border-ok/50 text-ok"
-              : phase === "connecting"
-                ? "border-chrome-border text-chrome-muted"
-                : "border-danger/50 text-danger",
-          )}
-        >
-          {phase}
-        </span>
-        {/* The bell is the phone's way to reach the queue. On a desktop the
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
+            {session}
+          </span>
+          <span
+            className={cx(
+              "shrink-0 rounded border px-1.5 py-0.5 text-[10px]",
+              phase === "open"
+                ? "border-ok/50 text-ok"
+                : phase === "connecting"
+                  ? "border-chrome-border text-chrome-muted"
+                  : "border-danger/50 text-danger",
+            )}
+          >
+            {phase}
+          </span>
+          {/* The bell is the phone's way to reach the queue. On a desktop the
             rail is already showing it, and a second count is just a second
             thing to keep in sync. */}
-        {queue.open > 0 && !desktop && (
-          <button
-            onClick={queue.openStack}
-            aria-label={`${queue.open} waiting on you`}
-            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-fg hover:bg-white/10"
-          >
-            <Bell className="w-4 h-4" />
-            <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-white">
-              {queue.open > 99 ? "99+" : queue.open}
-            </span>
-          </button>
-        )}
-        <FontControl size={fontSize} onChange={setFontSize} />
-        {desktop && (
-          <button
-            aria-label="Send an image"
-            title="Send an image to herdr's focused pane"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted hover:bg-white/10 hover:text-chrome-fg"
-          >
-            <ImageIcon className="w-4 h-4" />
-          </button>
-        )}
-        {desktop && <ThemeToggle />}
+          {queue.open > 0 && !desktop && (
+            <button
+              onClick={queue.openStack}
+              aria-label={`${queue.open} waiting on you`}
+              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-fg hover:bg-chrome-hover"
+            >
+              <Bell className="w-4 h-4" />
+              <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold leading-4 text-danger-fg">
+                {queue.open > 99 ? "99+" : queue.open}
+              </span>
+            </button>
+          )}
+          <FontControl size={fontSize} onChange={setFontSize} />
+          {desktop && (
+            <button
+              aria-label="Send an image"
+              title="Send an image to herdr's focused pane"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-chrome-muted hover:bg-chrome-hover hover:text-chrome-fg"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
+          )}
+          {desktop && <ThemeToggle />}
+        </div>
       </header>
 
       {/*
@@ -721,7 +746,7 @@ export function TerminalPage() {
           )}
 
           {failure && !gate && (
-            <div className="shrink-0 border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+            <div className="shrink-0 border-t border-danger/40 bg-danger-weak px-3 py-2 text-xs text-danger">
               {failure}
             </div>
           )}
@@ -872,7 +897,7 @@ function ImagePasteStrip({ state, onDismiss }: { state: ImagePasteState; onDismi
       className={cx(
         "flex h-9 shrink-0 items-center gap-2 border-t px-2 text-[11px]",
         failed
-          ? "border-danger/40 bg-danger/10 text-danger"
+          ? "border-danger/40 bg-danger-weak text-danger"
           : "border-border bg-surface-2 text-muted",
       )}
       role="status"
@@ -908,7 +933,7 @@ function FontControl({ size, onChange }: { size: number; onChange: (n: number) =
     <div className="flex shrink-0 items-center gap-1">
       <button
         aria-label="Smaller text"
-        className="flex h-8 w-8 items-center justify-center rounded text-chrome-muted hover:bg-white/10"
+        className="flex h-8 w-8 items-center justify-center rounded text-chrome-muted hover:bg-chrome-hover"
         onClick={() => onChange(FONT_SIZES[Math.max(0, idx - 1)] ?? 10)}
       >
         <Minus className="w-4 h-4" />
@@ -916,7 +941,7 @@ function FontControl({ size, onChange }: { size: number; onChange: (n: number) =
       <span className="font-mono text-[10px] text-chrome-muted">{size}</span>
       <button
         aria-label="Larger text"
-        className="flex h-8 w-8 items-center justify-center rounded text-chrome-muted hover:bg-white/10"
+        className="flex h-8 w-8 items-center justify-center rounded text-chrome-muted hover:bg-chrome-hover"
         onClick={() => onChange(FONT_SIZES[Math.min(FONT_SIZES.length - 1, idx + 1)] ?? 14)}
       >
         <Plus className="w-4 h-4" />

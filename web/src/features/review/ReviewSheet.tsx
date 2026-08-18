@@ -114,7 +114,7 @@ export function ReviewSheet({
       aria-label={item?.title ?? "Review"}
     >
       <div
-        className="absolute inset-0 bg-black/60"
+        className="fade absolute inset-0 bg-scrim"
         onClick={onClose}
         aria-hidden
         data-testid="review-sheet-scrim"
@@ -122,7 +122,7 @@ export function ReviewSheet({
       {/* Full-bleed on a phone, a centred panel above `sm`, and wider again on
           a desktop — where this is the meatprompt modal the rail opens and a
           diff has room to be read rather than scrolled sideways. */}
-      <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col border-t border-border bg-surface sm:my-4 sm:rounded sm:border lg:my-8 lg:max-w-4xl">
+      <div className="rise relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col border-t border-border bg-surface shadow-2xl sm:my-4 sm:rounded-xl sm:border lg:my-8 lg:max-w-4xl">
         <SheetHeader
           item={item}
           waiting={waiting}
@@ -213,7 +213,7 @@ export function ReviewSheet({
         {waiting > 0 && onNext && (
           <button
             onClick={onNext}
-            className="shrink-0 border-t border-border bg-surface-2 px-3 py-2 text-left text-[11px] text-accent"
+            className="min-h-11 shrink-0 border-t border-border bg-surface-2 px-3 py-2 text-left text-[11px] text-accent transition-colors hover:bg-hover"
           >
             <span className="inline-flex items-center gap-1">
               <Layers className="w-3.5 h-3.5" />
@@ -242,39 +242,41 @@ function SheetHeader({
 }) {
   return (
     <div
-      className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2"
+      className="shrink-0 border-b border-border bg-surface-2"
       style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
     >
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        {item?.urgency === "blocking" ? (
-          <Chip tone="danger">blocking</Chip>
-        ) : item ? (
-          <Chip>{item.urgency}</Chip>
-        ) : (
-          <Spinner label="" />
-        )}
-        {waiting > 0 && (
-          <span className="whitespace-nowrap text-[11px] text-muted">
-            <Clock className="mr-0.5 inline w-3 h-3" />
-            {waiting} waiting
-          </span>
-        )}
-      </span>
-      <button
-        aria-label="More actions"
-        aria-expanded={moreOpen}
-        onClick={onMore}
-        className="flex h-11 w-11 items-center justify-center text-muted"
-      >
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-      <button
-        aria-label="Later"
-        onClick={onClose}
-        className="flex h-11 w-11 items-center justify-center text-muted"
-      >
-        <X className="w-4 h-4" />
-      </button>
+      <div className="flex h-12 items-center gap-2 pl-2 pr-1">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {item?.urgency === "blocking" ? (
+            <Chip tone="danger">blocking</Chip>
+          ) : item ? (
+            <Chip>{item.urgency}</Chip>
+          ) : (
+            <Spinner label="" />
+          )}
+          {waiting > 0 && (
+            <span className="whitespace-nowrap text-[11px] text-muted">
+              <Clock className="mr-0.5 inline w-3 h-3" />
+              {waiting} waiting
+            </span>
+          )}
+        </span>
+        <button
+          aria-label="More actions"
+          aria-expanded={moreOpen}
+          onClick={onMore}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-heading"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+        <button
+          aria-label="Later"
+          onClick={onClose}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-heading"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -297,7 +299,7 @@ function MoreStrip({
   onDismiss: () => void;
 }) {
   return (
-    <div className="scroll-x no-scrollbar flex shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2 py-1.5">
+    <div className="drop scroll-x no-scrollbar flex shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2 py-1.5">
       <StripButton icon={<Link2 className="w-3.5 h-3.5" />} label="Copy link" onClick={onCopy} />
       <StripButton
         icon={<ExternalLink className="w-3.5 h-3.5" />}
@@ -333,8 +335,11 @@ function StripButton({
   danger?: boolean;
 }) {
   const className = cx(
-    "flex h-9 shrink-0 items-center gap-1 whitespace-nowrap rounded border border-border px-2 text-[11px]",
-    danger ? "text-danger" : "text-body",
+    "flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded border px-2.5 text-[11px]",
+    "transition-colors",
+    danger
+      ? "border-danger/40 text-danger hover:bg-danger-weak"
+      : "border-border bg-surface text-body hover:bg-hover",
   );
   if (to) {
     return (

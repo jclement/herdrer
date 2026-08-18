@@ -22,22 +22,56 @@
   --color-hover: #f1f5f9;
   --color-selected: #e0f2fe;
   --color-accent: #0b6bcb;
-  --color-accent-fg: #ffffff;
   --color-ok: #157f3d;
   --color-warn: #a86000;
   --color-danger: #c02626;
   --color-info: #0b6bcb;
 
+  /*
+   * Foreground for text sitting on a *solid* fill of the colour above. Every
+   * status colour needs one, because "white on the status colour" only works
+   * in one of the two themes: dark mode lightens each status hue so it stays
+   * legible as text on a dark surface, and white on a light hue is 2.5:1.
+   * These are the pair that makes a filled badge readable in both.
+   */
+  --color-accent-fg: #ffffff;
+  --color-ok-fg: #ffffff;
+  --color-warn-fg: #ffffff;
+  --color-danger-fg: #ffffff;
+  --color-info-fg: #ffffff;
+
+  /*
+   * The tinted grounds. A chip that is only an outline disappears against a
+   * dense table; a chip that is a saturated block shouts. These sit between:
+   * enough tint to read as a status at arm's length, not enough to compete
+   * with the sentence next to it.
+   */
+  --color-accent-weak: #e8f2fd;
+  --color-ok-weak: #e6f4ec;
+  --color-warn-weak: #fbf1e0;
+  --color-danger-weak: #fdeaea;
+  --color-info-weak: #e8f2fd;
+
+  /* The dark header, and the one hover it has, in both themes. */
   --color-chrome: #0b0f14;
   --color-chrome-fg: #d7e0ea;
   --color-chrome-muted: #8493a3;
   --color-chrome-border: #1c2530;
+  --color-chrome-hover: #ffffff1a;
+
+  /* What a sheet, a modal and a full-screen viewer put the page behind. */
+  --color-scrim: #0f172a99;
 
   --color-diff-add: #e5f5ea;
   --color-diff-add-fg: #0f5c2e;
+  --color-diff-add-edge: #34a05e;
   --color-diff-del: #fdeaea;
   --color-diff-del-fg: #8f1d1d;
+  --color-diff-del-edge: #d05252;
   --color-diff-meta: #eef1f5;
+
+  /* Deliberate motion. Two durations, one curve — see `.rise` etc. below. */
+  --ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 /*
@@ -87,6 +121,19 @@
   --term-bright-magenta: #dcb0ff;
   --term-bright-cyan: #7ee0e0;
   --term-bright-white: #f2f7fb;
+
+  /*
+   * The single most effective dark-mode fix in the file.
+   *
+   * `color-scheme` is what tells the engine which palette to paint the things
+   * the stylesheet cannot reach: the canvas behind the document (which is what
+   * iOS shows in the rubber band at the top and bottom of a scroll), native
+   * scrollbars, the default background of an <iframe> before its document has
+   * painted, form control internals, and the text-selection and autofill
+   * colours. Without it a "dark" app flashes white every time a thumb
+   * overscrolls, and every scrollbar on the page is a light one.
+   */
+  color-scheme: light;
 }
 
 .dark {
@@ -100,16 +147,36 @@
   --color-hover: #1a222c;
   --color-selected: #10293b;
   --color-accent: #4aa8ff;
-  --color-accent-fg: #06121e;
   --color-ok: #46c07a;
   --color-warn: #e0a03a;
   --color-danger: #f2666a;
   --color-info: #4aa8ff;
 
+  /*
+   * Dark on the light hue, not white on it. Each of these lands above 7:1 on
+   * its own fill; white would land near 2.5:1 and is the reason a red badge
+   * used to be unreadable on a phone at night.
+   */
+  --color-accent-fg: #06121e;
+  --color-ok-fg: #04180d;
+  --color-warn-fg: #1d1204;
+  --color-danger-fg: #2a0e0f;
+  --color-info-fg: #06121e;
+
+  --color-accent-weak: #12293c;
+  --color-ok-weak: #10261a;
+  --color-warn-weak: #2a2110;
+  --color-danger-weak: #2c1719;
+  --color-info-weak: #12293c;
+
+  --color-scrim: #01050acc;
+
   --color-diff-add: #10281b;
   --color-diff-add-fg: #8fdcab;
+  --color-diff-add-edge: #2f7b4c;
   --color-diff-del: #2a1416;
   --color-diff-del-fg: #f3a0a3;
+  --color-diff-del-edge: #8c3a3d;
   --color-diff-meta: #1a222c;
 
   /*
@@ -120,12 +187,27 @@
   --term-bg: #0f141a; /* = --color-surface (dark) */
   --term-selection: #10293baa; /* = --color-selected (dark), translucent */
   --term-selection-inactive: #10293b66;
+
+  color-scheme: dark;
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+/*
+ * The html element carries the background as well as the body.
+ *
+ * The body's background propagates to the canvas only while html has none; the
+ * moment anything paints html the propagation stops, and a phone that
+ * overscrolls past the end of the body shows whatever html is. Setting both is
+ * the belt to `color-scheme`'s braces, and it is what the PWA's launch frame
+ * paints before React has mounted.
+ */
+html {
+  background-color: var(--color-surface);
 }
 
 body {
@@ -137,6 +219,48 @@ body {
   -webkit-tap-highlight-color: transparent;
   text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: var(--color-selected);
+  color: var(--color-heading);
+}
+
+/*
+ * Scrollbars, from the same tokens as everything else.
+ *
+ * `color-scheme` above already makes the platform scrollbar dark, which is the
+ * part that matters on a phone. This is the desktop refinement: a thin bar that
+ * reads as a border rather than as a piece of the operating system parked
+ * inside a dense table.
+ */
+* {
+  scrollbar-color: var(--color-border) transparent;
+  scrollbar-width: thin;
+}
+
+@media (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-muted);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 /* Focus rings everywhere, one definition. */
@@ -168,11 +292,86 @@ body {
   padding-left: 1.25rem;
 }
 
+/*
+ * Motion, on purpose.
+ *
+ * Three animations, all of them saying the same thing: this arrived, it did not
+ * blink into being. A sheet rises from the edge it is anchored to, a strip
+ * drops from under the header, and a skeleton breathes so a slow network reads
+ * as "loading" rather than "broken". Nothing decorative, nothing longer than
+ * 220ms, and the reduced-motion block at the bottom of the file turns all of it
+ * off for anyone who asked.
+ */
+@keyframes rise {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes drop {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.rise {
+  animation: rise 200ms var(--ease-out-soft) both;
+}
+.drop {
+  animation: drop 180ms var(--ease-out-soft) both;
+}
+.fade {
+  animation: fade 160ms var(--ease-out-soft) both;
+}
+.breathe {
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /*
+   * The looping ones are stopped outright rather than sped up. Collapsing an
+   * `infinite` animation to 0.01ms does not stop it, it runs it a hundred
+   * thousand times a second — which is a worse answer to "I get motion sick"
+   * than the animation was.
+   */
+  .breathe {
+    animation: none !important;
+    opacity: 1 !important;
   }
 }

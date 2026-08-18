@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
 import type { ReviewItem } from "../../lib/types";
 import { answerOptions, recommendedKey, unanswerableReason } from "./answer";
 import { OptionCards } from "./OptionCards";
 import { DiffView } from "./DiffView";
-import { DocumentFrame } from "./DocumentFrame";
+import { DocumentFrame, renderURL, withTheme } from "./DocumentFrame";
 
 const base: ReviewItem = {
   id: "rv_test",
@@ -67,6 +67,11 @@ describe("DiffView", () => {
 });
 
 describe("DocumentFrame", () => {
+  afterEach(() => {
+    cleanup();
+    document.documentElement.classList.remove("dark");
+  });
+
   it("sandboxes agent-authored HTML without allow-same-origin", () => {
     const { container } = render(<DocumentFrame src="/api/v1/review/rv_test/render" title="doc" />);
     const frame = container.querySelector("iframe");
@@ -85,5 +90,65 @@ describe("DocumentFrame", () => {
       }),
     );
     expect(frame.style.height).toBe(before);
+  });
+});
+
+/**
+ * The document is server-rendered into an opaque-origin iframe, so it cannot
+ * read our `.dark` class, our custom properties or our localStorage. Left to
+ * itself it follows `prefers-color-scheme` — the operating system — and our
+ * theme has three states to the OS's two. A phone in light mode with the app
+ * toggled to dark rendered a white page inside a dark app, which is the whole
+ * reason this parameter exists.
+ */
+describe("the sandboxed document follows the app's theme, not the OS", () => {
+  afterEach(() => {
+    cleanup();
+    document.documentElement.classList.remove("dark");
+  });
+
+  function src(): string {
+    const frame = document.querySelector("iframe") as HTMLIFrameElement;
+    return frame.getAttribute("src") ?? "";
+  }
+
+  it("asks for the light render when the app is light", () => {
+    render(<DocumentFrame src={renderURL("rv_1")} title="doc" />);
+    expect(src()).toContain("theme=light");
+  });
+
+  it("asks for the dark render when the app is dark", () => {
+    document.documentElement.classList.add("dark");
+    render(<DocumentFrame src={renderURL("rv_1")} title="doc" />);
+    expect(src()).toContain("theme=dark");
+  });
+
+  it("re-renders the document when the theme is toggled under it", async () => {
+    render(<DocumentFrame src={renderURL("rv_1")} title="doc" />);
+    expect(src()).toContain("theme=light");
+    await act(async () => {
+      document.documentElement.classList.add("dark");
+      // MutationObserver callbacks are a microtask, not synchronous.
+      await Promise.resolve();
+    });
+    expect(src()).toContain("theme=dark");
+  });
+
+  it("keeps the attachment anchor behind the query, not inside it", () => {
+    // `src + "?theme=dark"` on a URL that already has a fragment puts the
+    // parameter inside the fragment, where the server never sees it.
+    expect(withTheme(renderURL("rv_1", "a-at_9"), "dark")).toBe(
+      "/api/v1/review/rv_1/render?theme=dark#a-at_9",
+    );
+  });
+
+  it("still refuses same-origin access however it is themed", () => {
+    document.documentElement.classList.add("dark");
+    const { container } = render(<DocumentFrame src={renderURL("rv_1")} title="doc" />);
+    const frame = container.querySelector("iframe");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("referrerPolicy") ?? frame?.getAttribute("referrerpolicy")).toBe(
+      "no-referrer",
+    );
   });
 });

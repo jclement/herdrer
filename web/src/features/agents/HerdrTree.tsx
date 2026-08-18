@@ -79,7 +79,7 @@ export function HerdrTree({
 
       {blocked.length > 0 && (
         <section>
-          <SectionHeader title={`Needs you · ${blocked.length}`} />
+          <SectionHeader sticky title={`Needs you · ${blocked.length}`} />
           <div className="divide-y divide-border">
             {blocked.map((l) => (
               <PaneRow
@@ -103,6 +103,7 @@ export function HerdrTree({
         tree.map((ws) => (
           <section key={ws.id}>
             <SectionHeader
+              sticky
               title={
                 <span className="flex items-center gap-1.5">
                   <Boxes className="w-3.5 h-3.5" />
@@ -177,7 +178,12 @@ function PaneRow({
   const blocked = isBlocked(status);
 
   return (
-    <div className={cx("flex items-start gap-2 px-3 py-2.5", blocked && "bg-danger/5")}>
+    <div
+      className={cx(
+        "flex items-start gap-2 border-l-2 py-2.5 pl-2.5 pr-3 transition-colors",
+        blocked ? "border-l-danger bg-danger-weak/40" : "border-l-transparent",
+      )}
+    >
       <div className="mt-0.5 shrink-0 text-muted">
         {agent ? <Bot className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
       </div>
@@ -215,7 +221,7 @@ function PaneRow({
         <button
           onClick={() => onOpenTerminal(pane)}
           aria-label={`Open the terminal on ${paneLabel(pane)}`}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded border border-border text-muted"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:border-accent/50 hover:bg-hover hover:text-accent"
         >
           <Terminal className="w-4 h-4" />
         </button>

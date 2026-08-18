@@ -142,7 +142,7 @@ function NotificationsCard() {
         />
 
         {!standalone && isIOS() && (
-          <div className="flex items-start gap-2 rounded border border-warn/40 bg-warn/5 p-2 text-warn">
+          <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn-weak p-2 text-warn">
             <Smartphone className="mt-0.5 w-4 h-4 shrink-0" />
             <span>
               iOS only delivers web push to a Home Screen web app. Share → Add to Home Screen, then
@@ -197,7 +197,7 @@ function PasskeysCard() {
         title="Passkeys"
         right={
           <button
-            className="text-[11px] text-accent"
+            className="-my-1.5 flex min-h-9 items-center rounded px-1 text-[11px] text-accent transition-colors hover:bg-hover"
             onClick={() =>
               mint.mutate(
                 { ttl_minutes: 15 },
@@ -234,7 +234,7 @@ function PasskeysCard() {
             {c.backup_state && <Chip>{c.backup_state}</Chip>}
             <button
               aria-label="Remove passkey"
-              className="p-2 text-danger"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-danger transition-colors hover:bg-danger-weak"
               onClick={() => void remove(c.id, c.name)}
             >
               <Trash2 className="w-4 h-4" />
@@ -296,8 +296,8 @@ function TerminalPermission({ credential }: { credential: Credential }) {
       disabled={setTerminal.isPending}
       aria-pressed={allowed}
       className={cx(
-        "mt-1 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] leading-4",
-        allowed ? "border-ok/40 text-ok" : "border-border text-muted",
+        "mt-1.5 inline-flex min-h-7 items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] leading-4 transition-colors",
+        allowed ? "border-ok/40 bg-ok-weak text-ok" : "border-border bg-surface-2 text-muted",
         setTerminal.isPending && "opacity-60",
       )}
     >
@@ -342,7 +342,10 @@ function SessionsCard() {
       <SectionHeader
         title="Sessions"
         right={
-          <button className="text-[11px] text-danger" onClick={() => void revokeAll()}>
+          <button
+            className="-my-1.5 flex min-h-9 items-center rounded px-1 text-[11px] text-danger transition-colors hover:bg-danger-weak"
+            onClick={() => void revokeAll()}
+          >
             revoke all
           </button>
         }
@@ -364,7 +367,7 @@ function SessionsCard() {
             {!s.current && (
               <button
                 aria-label="Revoke session"
-                className="p-2 text-danger"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-danger transition-colors hover:bg-danger-weak"
                 onClick={() => void revoke(s.id)}
               >
                 <Trash2 className="w-4 h-4" />
@@ -425,7 +428,10 @@ function TokensCard() {
       <SectionHeader
         title="Agent tokens"
         right={
-          <button className="text-[11px] text-accent" onClick={() => setCreating(true)}>
+          <button
+            className="-my-1.5 flex min-h-9 items-center rounded px-1 text-[11px] text-accent transition-colors hover:bg-hover"
+            onClick={() => setCreating(true)}
+          >
             + token
           </button>
         }
@@ -448,7 +454,7 @@ function TokensCard() {
             ) : (
               <button
                 aria-label="Revoke token"
-                className="p-2 text-danger"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-danger transition-colors hover:bg-danger-weak"
                 onClick={() => void revoke(t.id, t.name)}
               >
                 <Trash2 className="w-4 h-4" />
@@ -506,7 +512,7 @@ function TokensCard() {
 
       <Sheet open={!!secret} title="Copy this now" onClose={() => setSecret(null)}>
         <div className="space-y-3 p-3 text-xs">
-          <div className="flex items-start gap-2 rounded border border-warn/40 bg-warn/5 p-2 text-warn">
+          <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn-weak p-2 text-warn">
             <AlertTriangle className="mt-0.5 w-4 h-4 shrink-0" />
             <span>
               This is the only time this secret is shown. Close this sheet and it is gone — the box

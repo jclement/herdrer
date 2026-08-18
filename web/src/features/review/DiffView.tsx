@@ -20,7 +20,16 @@ const HUNK_LINE_CAP = 40;
 const HUNK_LINE_PEEK = 20;
 const LARGE_DIFF_LINES = 400;
 
-export function DiffView({ content, title }: { content: string; title: string }) {
+export function DiffView({
+  content,
+  title,
+  stat,
+}: {
+  content: string;
+  title: string;
+  /** The server's `+n −n`, when it computed one (a `filediff`). */
+  stat?: { adds: number; dels: number } | null;
+}) {
   const files = useMemo(() => parseDiff(content), [content]);
   const totalLines = useMemo(
     () => files.reduce((n, f) => n + f.hunks.reduce((m, h) => m + h.lines.length, 0), 0),
@@ -37,7 +46,7 @@ export function DiffView({ content, title }: { content: string; title: string })
 
   if (files.length === 0) {
     return (
-      <pre className="scroll-x m-3 rounded border border-border bg-surface-2 p-2 font-mono text-[11px] leading-5 text-body">
+      <pre className="scroll-x m-3 rounded-md border border-border bg-surface-2 p-2 font-mono text-[11px] leading-5 text-body">
         {content}
       </pre>
     );
@@ -46,13 +55,21 @@ export function DiffView({ content, title }: { content: string; title: string })
   return (
     <div>
       <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <div className="min-w-0 truncate text-xs text-muted">
-          {title} · {files.length} file{files.length === 1 ? "" : "s"}
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="min-w-0 truncate text-xs text-muted">
+            {title} · {files.length} file{files.length === 1 ? "" : "s"}
+          </span>
+          {stat && (
+            <span className="shrink-0 font-mono text-[11px] tabular-nums">
+              <span className="text-ok">+{stat.adds}</span>{" "}
+              <span className="text-danger">−{stat.dels}</span>
+            </span>
+          )}
         </div>
         <button
           className={cx(
-            "flex h-8 items-center gap-1 rounded border border-border px-2 text-[11px]",
-            wrap ? "text-accent" : "text-muted",
+            "flex h-10 shrink-0 items-center gap-1 rounded border px-2 text-[11px] transition-colors",
+            wrap ? "border-accent/50 bg-accent-weak text-accent" : "border-border text-muted",
           )}
           onClick={() => {
             setWrap((w) => {
@@ -95,9 +112,9 @@ function FileBlock({
   const [open, setOpen] = useState(defaultOpen && lines <= LARGE_DIFF_LINES);
 
   return (
-    <div className="overflow-hidden rounded border border-border">
+    <div className="overflow-hidden rounded-md border border-border">
       <button
-        className="flex w-full items-center gap-2 bg-surface-2 px-2 py-2 text-left"
+        className="flex min-h-11 w-full items-center gap-2 bg-surface-2 px-2 py-2 text-left transition-colors hover:bg-hover"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
@@ -116,6 +133,7 @@ function FileBlock({
           <span className="text-ok">+{file.adds}</span>{" "}
           <span className="text-danger">−{file.dels}</span>
         </span>
+        <StatBar adds={file.adds} dels={file.dels} />
       </button>
 
       {open &&
@@ -155,7 +173,7 @@ function HunkBlock({ hunk, wrap, index }: { hunk: DiffHunk; wrap: boolean; index
     <div className="border-t border-border">
       <div className="flex items-center gap-1 bg-diff-meta px-2 py-1">
         <button
-          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          className="flex min-h-9 min-w-0 flex-1 items-center gap-1 text-left"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
@@ -166,7 +184,11 @@ function HunkBlock({ hunk, wrap, index }: { hunk: DiffHunk; wrap: boolean; index
           )}
           <span className="truncate font-mono text-[10px] text-muted">{hunk.header}</span>
         </button>
-        <button onClick={() => void copy()} aria-label="Copy hunk" className="p-1 text-muted">
+        <button
+          onClick={() => void copy()}
+          aria-label="Copy hunk"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-hover hover:text-heading"
+        >
           {copied ? <Check className="w-3.5 h-3.5 text-ok" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
       </div>
@@ -186,7 +208,7 @@ function HunkBlock({ hunk, wrap, index }: { hunk: DiffHunk; wrap: boolean; index
           </div>
           {capped && (
             <button
-              className="w-full border-t border-border bg-surface-2 py-1.5 text-[11px] text-accent"
+              className="min-h-11 w-full border-t border-border bg-surface-2 text-[11px] text-accent transition-colors hover:bg-hover"
               onClick={() => setFull(true)}
             >
               show all {hunk.lines.length} lines
@@ -198,6 +220,31 @@ function HunkBlock({ hunk, wrap, index }: { hunk: DiffHunk; wrap: boolean; index
   );
 }
 
+/**
+ * The five-segment bar GitHub taught everyone to read.
+ *
+ * Ratio, not magnitude: it answers "is this mostly additions?" in the time it
+ * takes to glance, which is the question you actually have while scrolling a
+ * list of changed files. The numbers beside it carry the magnitude.
+ */
+function StatBar({ adds, dels }: { adds: number; dels: number }) {
+  const total = adds + dels;
+  if (total === 0) return null;
+  const filled = 5;
+  const green = Math.max(adds > 0 ? 1 : 0, Math.min(filled, Math.round((adds / total) * filled)));
+  const red = filled - green;
+  return (
+    <span className="hidden shrink-0 items-center gap-px sm:flex" aria-hidden>
+      {Array.from({ length: green }).map((_, i) => (
+        <span key={`a${i}`} className="h-2 w-2 rounded-[1px] bg-ok" />
+      ))}
+      {Array.from({ length: red }).map((_, i) => (
+        <span key={`d${i}`} className="h-2 w-2 rounded-[1px] bg-danger" />
+      ))}
+    </span>
+  );
+}
+
 function Row({ row, wrap }: { row: RenderRow; wrap: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -205,7 +252,7 @@ function Row({ row, wrap }: { row: RenderRow; wrap: boolean }) {
     if (!expanded) {
       return (
         <button
-          className="block w-full bg-surface-2 px-2 py-1 text-left text-[11px] text-muted hover:bg-hover"
+          className="block min-h-9 w-full bg-surface-2 px-2 py-1 text-left text-[11px] text-muted transition-colors hover:bg-hover"
           onClick={() => setExpanded(true)}
         >
           ⋯ {row.count} unchanged line{row.count === 1 ? "" : "s"}
@@ -247,16 +294,16 @@ function LineRow({
   // glyph and the aria-label stay, because colour alone is not a signal.
   const tone =
     kind === "add"
-      ? "bg-diff-add text-diff-add-fg"
+      ? "bg-diff-add text-diff-add-fg border-l-2 border-l-[var(--color-diff-add-edge)]"
       : kind === "del"
-        ? "bg-diff-del text-diff-del-fg"
+        ? "bg-diff-del text-diff-del-fg border-l-2 border-l-[var(--color-diff-del-edge)]"
         : kind === "meta"
-          ? "text-muted"
-          : "text-body";
+          ? "border-l-2 border-l-transparent text-muted"
+          : "border-l-2 border-l-transparent text-body";
   const sign = kind === "add" ? "+" : kind === "del" ? "−" : " ";
 
   return (
-    <div className={cx("flex items-start gap-2 px-2", tone)}>
+    <div className={cx("flex items-start gap-2 pl-1.5 pr-2", tone)}>
       <span className="hidden w-10 shrink-0 select-none text-right tabular-nums opacity-50 sm:inline">
         {no ?? ""}
       </span>

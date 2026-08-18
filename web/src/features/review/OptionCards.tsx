@@ -61,26 +61,42 @@ function OptionCard({
   const long = (detail?.length ?? 0) > 90;
 
   return (
-    <div className={cx(selected && "bg-selected", disabled && "opacity-60")}>
+    <div
+      className={cx(
+        "border-l-2 transition-colors",
+        // Selection is a *state*, so it gets a ground and an edge, not a tick
+        // hidden at the end of a row. The edge is what survives a glance while
+        // the thumb is still on the screen covering the ground.
+        selected ? "border-l-accent bg-selected" : "border-l-transparent",
+        disabled && "opacity-60",
+      )}
+    >
       <button
-        className="flex w-full items-start gap-2 px-3 py-3 text-left"
+        className={cx(
+          "flex w-full items-start gap-2.5 py-3 pl-2.5 pr-3 text-left transition-colors",
+          !disabled && !selected && "hover:bg-hover",
+        )}
         onClick={onSelect}
         aria-pressed={selected}
         disabled={disabled}
       >
         <span
           className={cx(
-            "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border font-mono text-[11px]",
-            selected ? "border-accent bg-accent text-accent-fg" : "border-border text-muted",
+            "mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-full border font-mono text-[11px] font-semibold transition-colors",
+            selected
+              ? "border-accent bg-accent text-accent-fg"
+              : recommended
+                ? "border-accent/50 bg-accent-weak text-accent"
+                : "border-border text-muted",
           )}
         >
           {optionKey.slice(0, 1).toUpperCase()}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <span className="text-sm font-medium text-heading">{label}</span>
+          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <span className="text-sm font-medium leading-snug text-heading">{label}</span>
             {recommended && (
-              <span className="inline-flex items-center gap-0.5 rounded border border-accent/40 px-1 text-[10px] text-accent">
+              <span className="inline-flex items-center gap-0.5 rounded border border-accent/40 bg-accent-weak px-1 text-[10px] font-medium text-accent">
                 <Star className="w-3 h-3" />
                 recommended
               </span>
@@ -88,7 +104,10 @@ function OptionCard({
           </span>
           {detail && (
             <span
-              className={cx("mt-0.5 block text-xs text-muted", long && !expanded && "line-clamp-1")}
+              className={cx(
+                "mt-1 block text-xs leading-relaxed text-muted",
+                long && !expanded && "line-clamp-1",
+              )}
             >
               {detail}
             </span>
@@ -97,7 +116,7 @@ function OptionCard({
       </button>
       {long && (
         <button
-          className="flex w-full items-center gap-1 px-3 pb-2 text-[11px] text-accent"
+          className="flex min-h-9 w-full items-center gap-1 px-3 pb-2 text-[11px] text-accent"
           onClick={() => setExpanded((v) => !v)}
         >
           {expanded ? (

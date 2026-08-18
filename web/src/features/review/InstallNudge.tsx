@@ -17,9 +17,9 @@ export function InstallNudge() {
   if (dismissed || isStandalone() || !isIOS()) return null;
 
   return (
-    <div className="flex items-start gap-2 border-b border-border bg-surface-2 px-3 py-2">
+    <div className="flex items-start gap-2 border-b border-border bg-surface-2 py-2 pl-3 pr-1">
       <Share className="mt-0.5 w-4 h-4 shrink-0 text-accent" />
-      <div className="flex-1 text-xs text-body">
+      <div className="min-w-0 flex-1 py-1 text-xs leading-relaxed text-body">
         <span className="font-medium text-heading">
           Notifications need this on your Home Screen.
         </span>{" "}
@@ -28,7 +28,7 @@ export function InstallNudge() {
       </div>
       <button
         aria-label="Dismiss"
-        className="p-1 text-muted"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-hover hover:text-heading"
         onClick={() => {
           flags.write(FLAG, "1");
           setDismissed(true);
