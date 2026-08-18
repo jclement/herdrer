@@ -67,6 +67,8 @@ Usage:
   herdrer serve                    Run the server (default)
   herdrer enroll [flags]           Mint a one-time passkey registration code
   herdrer token create [flags]     Mint an agent API token
+  herdrer token list               Show agent tokens and their state
+  herdrer token revoke <id>        Revoke an agent token immediately
   herdrer version
 
 Registration requires a code minted on this machine. There is no open signup,
@@ -259,8 +261,17 @@ func cmdEnroll(args []string) error {
 // --- token ------------------------------------------------------------------------
 
 func cmdToken(args []string) error {
-	if len(args) == 0 || args[0] != "create" {
-		return fmt.Errorf("usage: herdrer token create --name <name> [--scopes review:write,review:read]")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: herdrer token <create|list|revoke>")
+	}
+	switch args[0] {
+	case "list":
+		return cmdTokenList(args[1:])
+	case "revoke":
+		return cmdTokenRevoke(args[1:])
+	case "create":
+	default:
+		return fmt.Errorf("unknown token subcommand %q; want create, list or revoke", args[0])
 	}
 	fs := flag.NewFlagSet("token create", flag.ExitOnError)
 	name := fs.String("name", "", "what this token is for")
@@ -323,4 +334,93 @@ func cmdToken(args []string) error {
 
 `, t.Name, target.Handle, strings.Join(t.Scopes, " "), secret)
 	return nil
+}
+
+// cmdTokenList shows every agent token, including revoked ones, because the
+// audit question is usually "what existed" rather than "what works now".
+func cmdTokenList(args []string) error {
+	fs := flag.NewFlagSet("token list", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return fmt.Errorf("no users registered yet")
+	}
+
+	fmt.Printf("\n  %-38s %-16s %-12s %-20s %s\n", "ID", "NAME", "PREFIX", "LAST USED", "STATE")
+	for _, u := range users {
+		toks, err := st.ListAPITokens(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		for _, t := range toks {
+			state := "active"
+			if t.RevokedAt != nil {
+				state = "revoked"
+			} else if t.ExpiresAt != nil && time.Now().After(*t.ExpiresAt) {
+				state = "expired"
+			}
+			used := "never"
+			if t.LastUsedAt != nil {
+				used = t.LastUsedAt.Format("2006-01-02 15:04")
+			}
+			fmt.Printf("  %-38s %-16s %-12s %-20s %s\n", t.ID, t.Name, t.TokenPrefix, used, state)
+		}
+	}
+	fmt.Println()
+	return nil
+}
+
+// cmdTokenRevoke kills a token immediately. The row survives for the audit
+// trail; only its ability to authenticate is removed.
+func cmdTokenRevoke(args []string) error {
+	fs := flag.NewFlagSet("token revoke", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: herdrer token revoke <id>   (see: herdrer token list)")
+	}
+	id := fs.Arg(0)
+
+	ctx := context.Background()
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if err := st.RevokeAPIToken(ctx, u.ID, id); err == nil {
+			st.Audit(ctx, store.AuditEntry{Actor: "system", Kind: "token.revoked",
+				Subject: id, Detail: map[string]any{"via": "cli"}})
+			fmt.Printf("revoked %s\n", id)
+			return nil
+		}
+	}
+	return fmt.Errorf("no such token: %s", id)
+}
+
+// openStore is the shared setup for CLI verbs that touch the database.
+func openStore(ctx context.Context) (*store.Store, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(ctx, cfg.DBPath)
 }

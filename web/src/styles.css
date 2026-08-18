@@ -40,6 +40,55 @@
   --color-diff-meta: #eef1f5;
 }
 
+/*
+ * The terminal palette.
+ *
+ * Declared outside `@theme` because these are not Tailwind colours — nothing
+ * renders them as a utility class. They exist so xterm can be themed from the
+ * stylesheet rather than from a literal in TypeScript: lib/termTheme.ts reads
+ * them with getComputedStyle and assigns `term.options.theme`, which means the
+ * three-state toggle moves the terminal without remounting it and dropping the
+ * PTY.
+ *
+ * A terminal is a terminal: this is dark in *both* themes, exactly like the
+ * `--color-chrome` header. In light mode the terminal reads as a dark inset
+ * panel on a white page (the values below); in dark mode it blends into the
+ * app's own surface (the `.dark` overrides below). A white PTY in a light theme
+ * is nobody's terminal, and the escape sequences agents emit assume otherwise.
+ *
+ * The ANSI sixteen do not move between themes. They are tuned for a near-black
+ * background, which is what both themes give them, and an agent's `\e[32m` has
+ * to stay legible whatever the surrounding page is doing.
+ */
+:root {
+  --term-bg: #0b0f14; /* = --color-chrome */
+  --term-fg: #d7e0ea; /* = --color-chrome-fg */
+  --term-cursor: #4aa8ff;
+  --term-cursor-fg: #06121e;
+  --term-selection: #4aa8ff44;
+  --term-selection-inactive: #4aa8ff22;
+
+  --term-black: #12181f;
+  --term-red: #f2666a;
+  --term-green: #46c07a;
+  --term-yellow: #e0a03a;
+  --term-blue: #4aa8ff;
+  --term-magenta: #c58af9;
+  --term-cyan: #3fc7c7;
+  --term-white: #c2ccd7;
+
+  /* bright-black is dim/comment text in most agent output, so it has to be
+     legible rather than decorative — #000 with a blur is not a colour. */
+  --term-bright-black: #55636f;
+  --term-bright-red: #ff8f92;
+  --term-bright-green: #7ede9f;
+  --term-bright-yellow: #f5c26b;
+  --term-bright-blue: #82c4ff;
+  --term-bright-magenta: #dcb0ff;
+  --term-bright-cyan: #7ee0e0;
+  --term-bright-white: #f2f7fb;
+}
+
 .dark {
   --color-surface: #0f141a;
   --color-surface-2: #141b23;
@@ -62,6 +111,15 @@
   --color-diff-del: #2a1416;
   --color-diff-del-fg: #f3a0a3;
   --color-diff-meta: #1a222c;
+
+  /*
+   * Dark mode: the terminal stops being an inset panel and becomes the page.
+   * It takes the app's own surface so there is no seam between the shell and
+   * the PTY, and the selection takes the app's selected colour.
+   */
+  --term-bg: #0f141a; /* = --color-surface (dark) */
+  --term-selection: #10293baa; /* = --color-selected (dark), translucent */
+  --term-selection-inactive: #10293b66;
 }
 
 html,
