@@ -4,7 +4,9 @@ import {
   Bell,
   ClipboardPaste,
   Fingerprint,
+  Image as ImageIcon,
   Keyboard,
+  Loader2,
   Minus,
   Plus,
   Power,
@@ -19,6 +21,7 @@ import { stepUp } from "../../lib/stepup";
 import type { Ticket } from "../../lib/types";
 import { flags } from "../../lib/storage";
 import { useVisualViewport } from "../../lib/viewport";
+import { humanBytes, imageFromTransfer, sendImage, uploadPaste } from "../../lib/paste";
 import { useBootstrap } from "../../lib/queries";
 import { Button, cx } from "../../components/ui";
 import { BottomNav } from "../../components/AppShell";
@@ -42,6 +45,15 @@ type Phase = "connecting" | "open" | "closed" | "error";
 type Gate = "stepup" | "review-only";
 
 const FONT_SIZES = [10, 12, 14] as const;
+
+/** An image on its way to the box, or the reason it did not get there. */
+interface ImagePasteState {
+  name: string;
+  bytes: number;
+  loaded: number;
+  status: "uploading" | "error";
+  message?: string;
+}
 
 /**
  * herdr, live, and the front page of the app.
@@ -84,6 +96,9 @@ export function TerminalPage() {
   const steppedUp = useRef(false);
   const [interactive, setInteractive] = useState(false);
   const [paneHint, setPaneHint] = useState<string | null>(search.pane ?? null);
+  const [dragging, setDragging] = useState(false);
+  const [imagePaste, setImagePaste] = useState<ImagePasteState | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fontSize, setFontSize] = useState<number>(() => {
     const stored = Number(flags.read("term-font"));
     return FONT_SIZES.includes(stored as (typeof FONT_SIZES)[number]) ? stored : 12;
@@ -97,6 +112,8 @@ export function TerminalPage() {
     alt: false,
     lock: null,
   });
+
+  useEffect(() => setPaneHint(search.pane ?? null), [search.pane]);
 
   const encoder = useMemo(() => new TextEncoder(), []);
 
@@ -221,11 +238,9 @@ export function TerminalPage() {
         // default session — the one whose tree /agents renders. It is not an
         // agent name: passing one would make herdr launch a brand new, empty
         // session named after the agent you were trying to look at.
-        ticket = await api.post<Ticket>(
-          "/api/v1/terminal/ticket",
-          session ? { session } : {},
-          { stepUp: false },
-        );
+        ticket = await api.post<Ticket>("/api/v1/terminal/ticket", session ? { session } : {}, {
+          stepUp: false,
+        });
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.isStepUp) {
@@ -340,6 +355,9 @@ export function TerminalPage() {
   // may take the screen, so the queue has to know.
   useEffect(() => {
     queue.setInteractive(interactive);
+    // Leaving the terminal releases it: nothing else on the app sets this, and a
+    // stale `true` would keep `normal` questions peeking forever on /agents.
+    return () => queue.setInteractive(false);
   }, [interactive, queue]);
 
   /*
@@ -408,8 +426,79 @@ export function TerminalPage() {
     }
   };
 
+  /**
+   * An image, handed to whatever agent herdr has focused.
+   *
+   * Nothing is written to the socket until the upload has landed — see
+   * lib/paste.ts. A failure leaves the terminal untouched and says why, because
+   * a path typed for a file that does not exist would have the agent report
+   * something baffling about a missing image instead.
+   */
+  const putImage = useCallback(
+    async (file: File | Blob, label?: string) => {
+      if (!interactive) {
+        toast.show("Take control first — the terminal is read-only until you do.");
+        return;
+      }
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        toast.show("The terminal isn't connected.", { tone: "danger" });
+        return;
+      }
+      const name = label ?? (file instanceof File ? file.name : "image");
+      setImagePaste({ name, bytes: file.size, loaded: 0, status: "uploading" });
+      const ok = await sendImage(file, {
+        upload: uploadPaste,
+        write: (text) => {
+          queue.noteInput();
+          sendText(text);
+        },
+        onProgress: (loaded) =>
+          setImagePaste((s) => (s && s.status === "uploading" ? { ...s, loaded } : s)),
+        onError: (message) =>
+          setImagePaste({ name, bytes: file.size, loaded: 0, status: "error", message }),
+        onDone: () => termRef.current?.focus(),
+      });
+      if (ok) setImagePaste(null);
+    },
+    [interactive, queue, sendText, toast],
+  );
+
+  /*
+   * Paste is registered in the capture phase on the host, above xterm's own
+   * handler on its hidden textarea. An image paste is claimed here and stopped
+   * before xterm sees it; anything else — text, which is the common case — is
+   * left entirely alone and falls through to the terminal's normal handling.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onPaste = (e: ClipboardEvent) => {
+      // While a review is up the paste belongs to its note field, not to the
+      // shell underneath. It cannot reach here through the DOM, but say so.
+      if (queue.sheetId !== null) return;
+      const file = imageFromTransfer(e.clipboardData);
+      if (!file) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void putImage(file);
+    };
+    host.addEventListener("paste", onPaste, true);
+    return () => host.removeEventListener("paste", onPaste, true);
+  }, [putImage, queue.sheetId]);
+
+  const onDrop = (e: React.DragEvent) => {
+    setDragging(false);
+    const file = imageFromTransfer(e.dataTransfer);
+    if (!file) return;
+    e.preventDefault();
+    void putImage(file);
+  };
+
   const chrome = interactive ? 96 : 48 + 56; // key bar, or read-only bar plus nav
-  const termHeight = Math.max(120, vv.height - 40 - chrome - (paneHint ? 28 : 0));
+  const termHeight = Math.max(
+    120,
+    vv.height - 40 - chrome - (paneHint ? 28 : 0) - (imagePaste ? 36 : 0),
+  );
 
   return (
     <div className="fixed inset-0 flex flex-col bg-surface" style={{ height: vv.height }}>
@@ -418,8 +507,10 @@ export function TerminalPage() {
         style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
         <span className="shrink-0 text-sm font-semibold tracking-tight">herdrer</span>
+        {/* The default session is the common case and needs no label; a named
+            one does, because it is a different herdr server entirely. */}
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-chrome-muted">
-          {session || "default session"}
+          {session}
         </span>
         <span
           className={cx(
@@ -464,12 +555,25 @@ export function TerminalPage() {
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden"
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+      >
         <div
           ref={hostRef}
           className="h-full overflow-hidden px-1"
           style={{ height: termHeight, touchAction: "manipulation" }}
         />
+        {dragging && (
+          <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded border-2 border-dashed border-accent bg-surface/80 text-sm text-accent">
+            Drop an image to hand it to the agent
+          </div>
+        )}
         {gate && (
           <StepUpGate
             gate={gate}
@@ -479,6 +583,21 @@ export function TerminalPage() {
           />
         )}
       </div>
+
+      {imagePaste && <ImagePasteStrip state={imagePaste} onDismiss={() => setImagePaste(null)} />}
+
+      {/* The only route in on iOS, where a web terminal has no image paste at all. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void putImage(file);
+        }}
+      />
 
       {failure && !gate && (
         <div className="shrink-0 border-t border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
@@ -521,6 +640,7 @@ export function TerminalPage() {
           onPaste={() => void paste()}
           onKeyboard={() => termRef.current?.focus()}
           onRelease={releaseControl}
+          onPickImage={() => fileInputRef.current?.click()}
         />
       )}
     </div>
@@ -589,6 +709,55 @@ function StepUpGate({
   );
 }
 
+/**
+ * What is happening to the image, in one row.
+ *
+ * A 12 MiB screenshot over LTE takes long enough that silence reads as a hang,
+ * and a refusal that produced no visible change reads as a bug. So: a real byte
+ * count while it is in flight, the server's own words when it says no, and a
+ * note about where the path is going to land — herdr types it into whichever
+ * pane it currently has focused, which is usually but not always the one you
+ * were looking at.
+ */
+function ImagePasteStrip({ state, onDismiss }: { state: ImagePasteState; onDismiss: () => void }) {
+  const failed = state.status === "error";
+  const pct = state.bytes > 0 ? Math.min(100, Math.round((state.loaded / state.bytes) * 100)) : 0;
+
+  return (
+    <div
+      className={cx(
+        "flex h-9 shrink-0 items-center gap-2 border-t px-2 text-[11px]",
+        failed
+          ? "border-danger/40 bg-danger/10 text-danger"
+          : "border-border bg-surface-2 text-muted",
+      )}
+      role="status"
+      aria-live="polite"
+    >
+      {failed ? (
+        <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+      ) : (
+        <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" aria-hidden />
+      )}
+      <span className="min-w-0 flex-1 truncate">
+        {failed ? (
+          state.message
+        ) : (
+          <>
+            sending {state.name} · {humanBytes(state.loaded)} of {humanBytes(state.bytes)} ({pct}%)
+            — the path goes to herdr's focused pane
+          </>
+        )}
+      </span>
+      {failed && (
+        <button aria-label="Dismiss" onClick={onDismiss} className="shrink-0 p-1">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function FontControl({ size, onChange }: { size: number; onChange: (n: number) => void }) {
   const idx = FONT_SIZES.indexOf(size as (typeof FONT_SIZES)[number]);
   return (
@@ -628,6 +797,7 @@ function ModifierBar({
   onPaste,
   onKeyboard,
   onRelease,
+  onPickImage,
 }: {
   sticky: { ctrl: boolean; alt: boolean; lock: "ctrl" | "alt" | null };
   setSticky: (s: { ctrl: boolean; alt: boolean; lock: "ctrl" | "alt" | null }) => void;
@@ -636,6 +806,7 @@ function ModifierBar({
   onPaste: () => void;
   onKeyboard: () => void;
   onRelease: () => void;
+  onPickImage: () => void;
 }) {
   const vv = useVisualViewport();
 
@@ -703,6 +874,13 @@ function ModifierBar({
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded border border-border text-muted"
         >
           <ClipboardPaste className="w-4 h-4" />
+        </button>
+        <button
+          aria-label="Send an image"
+          onClick={onPickImage}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded border border-border text-muted"
+        >
+          <ImageIcon className="w-4 h-4" />
         </button>
         <button
           aria-label="Show keyboard"

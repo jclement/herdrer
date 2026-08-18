@@ -65,9 +65,7 @@ export function HerdrTree({
         right={
           <div className="flex items-center gap-1">
             {summary.version && <Chip title="herdr version">v{summary.version}</Chip>}
-            {summary.protocol !== null && (
-              <Chip title="socket protocol">p{summary.protocol}</Chip>
-            )}
+            {summary.protocol !== null && <Chip title="socket protocol">p{summary.protocol}</Chip>}
           </div>
         }
       />
@@ -76,11 +74,7 @@ export function HerdrTree({
         <Count icon={<Columns2 className="w-3 h-3" />} n={summary.tabs} label="tabs" />
         <Count icon={<Terminal className="w-3 h-3" />} n={summary.panes} label="panes" />
         <Count icon={<Bot className="w-3 h-3" />} n={summary.agents} label="agents" />
-        {summary.blocked > 0 && (
-          <Chip tone="danger">
-            {summary.blocked} blocked
-          </Chip>
-        )}
+        {summary.blocked > 0 && <Chip tone="danger">{summary.blocked} blocked</Chip>}
       </div>
 
       {blocked.length > 0 && (

@@ -301,7 +301,11 @@ function MoreStrip({
         label="Full page"
         to={`/r/${item.id}`}
       />
-      <StripButton icon={<Clock className="w-3.5 h-3.5" />} label="Needs a screen" onClick={onPark} />
+      <StripButton
+        icon={<Clock className="w-3.5 h-3.5" />}
+        label="Needs a screen"
+        onClick={onPark}
+      />
       <StripButton
         icon={<Trash2 className="w-3.5 h-3.5" />}
         label="Dismiss"

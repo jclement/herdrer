@@ -10,12 +10,14 @@ package terminal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -378,20 +380,26 @@ type Pane struct {
 // State is the whole session tree, plus what herdrer knows about its own
 // relationship to Herdr.
 type State struct {
-	Running    bool        `json:"running"`
-	Version    string      `json:"version"`
-	Protocol   int         `json:"protocol"`
-	Workspaces []Workspace `json:"workspaces"`
-	Agents     []Agent     `json:"agents"`
-	Blocked    int         `json:"blocked"`
+	Running            bool        `json:"running"`
+	Version            string      `json:"version"`
+	Protocol           int         `json:"protocol"`
+	FocusedPaneID      string      `json:"focused_pane_id"`
+	FocusedTabID       string      `json:"focused_tab_id"`
+	FocusedWorkspaceID string      `json:"focused_workspace_id"`
+	Workspaces         []Workspace `json:"workspaces"`
+	Agents             []Agent     `json:"agents"`
+	Blocked            int         `json:"blocked"`
 }
 
 type rawSnapshot struct {
 	Result struct {
 		Snapshot struct {
-			Version  string `json:"version"`
-			Protocol int    `json:"protocol"`
-			Agents   []struct {
+			Version            string `json:"version"`
+			Protocol           int    `json:"protocol"`
+			FocusedPaneID      string `json:"focused_pane_id"`
+			FocusedTabID       string `json:"focused_tab_id"`
+			FocusedWorkspaceID string `json:"focused_workspace_id"`
+			Agents             []struct {
 				Agent       string `json:"agent"`
 				AgentStatus string `json:"agent_status"`
 				Name        string `json:"name"`
@@ -461,6 +469,9 @@ func (s *Service) Snapshot(ctx context.Context) (*State, error) {
 	st.Running = true
 	st.Version = snap.Version
 	st.Protocol = snap.Protocol
+	st.FocusedPaneID = snap.FocusedPaneID
+	st.FocusedTabID = snap.FocusedTabID
+	st.FocusedWorkspaceID = snap.FocusedWorkspaceID
 
 	// Index agents by pane so a pane can carry the agent running inside it.
 	byPane := map[string]Agent{}
@@ -517,4 +528,80 @@ func (s *Service) Snapshot(ctx context.Context) (*State, error) {
 		st.Workspaces = append(st.Workspaces, w)
 	}
 	return st, nil
+}
+
+// FocusTarget names one thing to bring to the foreground. Exactly one field
+// may be set.
+type FocusTarget struct {
+	Agent       string `json:"agent,omitempty"`
+	TabID       string `json:"tab_id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+}
+
+// ErrNoFocusTarget means the caller named nothing, or more than one thing.
+var ErrNoFocusTarget = errors.New("name exactly one of agent, tab_id or workspace_id")
+
+// idPattern is what a Herdr identifier may contain.
+//
+// These values become argv for a subprocess. They arrive from a browser, so
+// they are attacker-influenced even though the caller holds a session, and the
+// allowlist is what keeps this from being a way to run something else. Herdr's
+// own ids look like `w1`, `w1:t2`, `w1:p3`; agent names are user-chosen but
+// Herdr constrains them to sane identifiers.
+//
+// The leading character is restricted separately, and that is not fussiness: a
+// dash is legal *inside* an identifier but a leading one turns the argument
+// into a flag. `herdr agent focus --help` prints help and exits zero, so a
+// value like that would be silently accepted as a successful focus. Anything
+// that starts with a dash is rejected outright.
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$`)
+
+// Focus brings a workspace, tab or agent to the foreground in the running
+// Herdr session.
+//
+// This is what turns the agents board from a map into a remote control: the
+// browser terminal renders whatever Herdr has focused, so focusing an agent
+// here is how you steer the single attached view from a phone.
+func (s *Service) Focus(ctx context.Context, t FocusTarget) error {
+	if s.herdrBin == "" {
+		return errors.New("herdr is not installed on this box")
+	}
+
+	var args []string
+	n := 0
+	if t.Agent != "" {
+		n++
+		args = []string{"agent", "focus", t.Agent}
+	}
+	if t.TabID != "" {
+		n++
+		args = []string{"tab", "focus", t.TabID}
+	}
+	if t.WorkspaceID != "" {
+		n++
+		args = []string{"workspace", "focus", t.WorkspaceID}
+	}
+	if n != 1 {
+		return ErrNoFocusTarget
+	}
+
+	// Validate the value, not just the shape: it is about to be argv.
+	if !idPattern.MatchString(args[len(args)-1]) {
+		return fmt.Errorf("%w: %q is not a valid identifier", ErrNoFocusTarget, args[len(args)-1])
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.herdrBin, args...)
+	cmd.Env = s.env()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("herdr %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+
+	// The board is about to be wrong by one focus change; drop the cache so the
+	// next read reflects what just happened.
+	s.mu.Lock()
+	s.at = time.Time{}
+	s.mu.Unlock()
+	return nil
 }

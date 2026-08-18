@@ -35,6 +35,7 @@ function ctx(over: Partial<QueueCtx> = {}): QueueCtx {
     pinned: null,
     deferred: [],
     cooldownUntil: 0,
+    quietSince: null,
     ...over,
   };
 }
@@ -160,13 +161,24 @@ describe("planQueue", () => {
     expect(plan.waiting).toBe(1);
   });
 
+  it("shows no overlay at all on a review surface, even one the human pinned", () => {
+    const plan = planQueue([item("a", "blocking")], ctx({ suppressed: true, pinned: "a" }), T0);
+    expect(plan.sheet).toBeNull();
+    expect(plan.peek).toBeNull();
+    expect(plan.open).toBe(1);
+  });
+
   it("ignores a pin for an item that is no longer open", () => {
     const plan = planQueue([item("a", "normal")], ctx({ pinned: "gone" }), T0);
     expect(plan.sheet).toBe("a");
   });
 
   it("skips a deferred item and offers the next one instead", () => {
-    const plan = planQueue([item("a", "blocking"), item("b", "normal")], ctx({ deferred: ["a"] }), T0);
+    const plan = planQueue(
+      [item("a", "blocking"), item("b", "normal")],
+      ctx({ deferred: ["a"] }),
+      T0,
+    );
     expect(plan.sheet).toBe("b");
     // The deferred item has not gone anywhere: it is still open and still counted.
     expect(plan.open).toBe(2);
@@ -194,6 +206,39 @@ describe("planQueue", () => {
 
   it("shows nothing when nothing is open", () => {
     expect(planQueue([], ctx(), T0)).toEqual({ sheet: null, peek: null, waiting: 0, open: 0 });
+  });
+});
+
+describe("not stampeding", () => {
+  it("stops re-raising things that were already waiting once you dispose of one", () => {
+    const items = [item("a", "blocking", 10), item("b", "blocking", 5)];
+    // A was answered or put off at T0; both were already waiting before that.
+    const after = planQueue(items, ctx({ deferred: ["a"], quietSince: T0 }), T0 + 10_000);
+    expect(after.sheet).toBeNull();
+    expect(after.peek).toBe("b");
+    expect(after.waiting).toBe(1);
+  });
+
+  it("still lets something that arrives afterwards interrupt", () => {
+    const fresh: QueueItem = {
+      id: "fresh",
+      title: "fresh",
+      urgency: "blocking",
+      created_at: new Date(T0 + 60_000).toISOString(),
+      provisional: false,
+    };
+    const plan = planQueue(
+      [item("old", "blocking", 5), fresh],
+      ctx({ quietSince: T0 }),
+      T0 + 61_000,
+    );
+    expect(plan.sheet).toBe("fresh");
+  });
+
+  it("lifts the quiet when the human goes looking", () => {
+    const items = [item("b", "blocking", 5)];
+    expect(planQueue(items, ctx({ quietSince: T0 }), T0).sheet).toBeNull();
+    expect(planQueue(items, ctx({ quietSince: null, pinned: "b" }), T0).sheet).toBe("b");
   });
 });
 

@@ -108,11 +108,25 @@ GET  /ws/terminal?ticket=…&cols=&rows=&session=
 GET  /ws/stream?ticket=…
 ```
 
+```
+POST /api/v1/herdr/focus  {agent} | {tab_id} | {workspace_id}  -> 204
+```
+
+`focus` is the only write herdrer makes into the Herdr session, and deliberately
+the narrowest one that makes the agents board useful: it changes what is
+focused and nothing else — it cannot start, stop, rename, or send keystrokes.
+Exactly one target field may be set. It requires **step-up**, because focus
+decides where the browser terminal's keystrokes and a pasted image path will
+land, which is shell-adjacent even though it types nothing itself. Identifiers
+are validated against an allowlist that also forbids a leading dash, since
+`herdr agent focus --help` exits zero and would otherwise look like success.
+
 `herdr/state` is what the agents UI is built on:
 
 ```jsonc
 {
   "running": true, "version": "0.8.0", "protocol": 19, "blocked": 0,
+  "focused_pane_id": "w1:p1", "focused_tab_id": "w1:t1", "focused_workspace_id": "w1",
   "workspaces": [{
     "id": "w1", "label": "", "number": 1, "focused": true,
     "agent_status": "unknown", "tab_count": 1, "pane_count": 1,

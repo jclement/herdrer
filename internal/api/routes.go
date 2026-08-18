@@ -82,6 +82,7 @@ func (s *Server) routes() http.Handler {
 	// and redeemed once, seconds later, on the upgrade.
 	human("GET /api/v1/agents", s.handleListAgents)
 	human("GET /api/v1/herdr/state", s.handleHerdrState)
+	human("POST /api/v1/herdr/focus", s.handleFocus)
 	human("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	human("POST /api/v1/paste", s.handlePaste)
 	human("POST /api/v1/stream/ticket", s.handleStreamTicket)

@@ -14,7 +14,13 @@ import { Chip, SectionHeader, cx } from "../../components/ui";
 import { DocumentFrame, renderURL } from "./DocumentFrame";
 import { FullscreenDocument, AttachmentList } from "./Attachments";
 import { OptionCards } from "./OptionCards";
-import { answerOptions, isAnswerable, optionLabel, recommendedKey, unanswerableReason } from "./answer";
+import {
+  answerOptions,
+  isAnswerable,
+  optionLabel,
+  recommendedKey,
+  unanswerableReason,
+} from "./answer";
 
 /**
  * The document itself: the question, the evidence, and the options.
@@ -58,7 +64,9 @@ export function ReviewBody({
     <div>
       {/* 1 — the question, one sentence. */}
       <div className="px-3 pt-3">
-        <h1 className={cx("font-medium leading-snug text-heading", inSheet ? "text-sm" : "text-base")}>
+        <h1
+          className={cx("font-medium leading-snug text-heading", inSheet ? "text-sm" : "text-base")}
+        >
           {item.title}
         </h1>
       </div>
@@ -71,7 +79,9 @@ export function ReviewBody({
         {item.context?.repo && (
           <Chip title="repo">
             <GitBranch className="w-3 h-3" />
-            {item.context.branch ? `${item.context.repo}@${item.context.branch}` : item.context.repo}
+            {item.context.branch
+              ? `${item.context.repo}@${item.context.branch}`
+              : item.context.repo}
           </Chip>
         )}
         <Chip title={absoluteTime(item.created_at)}>{shortAge(item.created_at)} old</Chip>

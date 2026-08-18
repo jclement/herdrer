@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/jclement/herdrer/internal/auth"
 	"github.com/jclement/herdrer/internal/notify"
+	"github.com/jclement/herdrer/internal/terminal"
 )
 
 // handleHerdrState returns the whole session tree for the agents UI.
@@ -113,4 +115,51 @@ func pushTestPayload(origin string) notify.Payload {
 		Title: "herdrer", Body: "Notifications are working.",
 		URL: origin + "/", Kind: "test", Tag: "test",
 	}
+}
+
+// handleFocus brings a workspace, tab or agent to the foreground in Herdr.
+//
+// This is the one write herdrer makes into the Herdr session, and it is
+// deliberately the narrowest one that makes the agents board useful: it changes
+// what is focused and nothing else. It cannot start, stop, rename, or send
+// keystrokes to anything.
+//
+// It requires the same step-up as opening a terminal. Focus decides where the
+// browser terminal's keystrokes — and a pasted image path — will land, so
+// steering it is shell-adjacent even though it types nothing itself.
+func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
+	if !s.terminal.Enabled() {
+		Forbidden(w, "the terminal is disabled on this server")
+		return
+	}
+	sess := SessionFrom(r.Context())
+	if !auth.SteppedUpRecently(sess) {
+		WriteError(w, http.StatusForbidden, CodeStepUpRequired,
+			"changing what the terminal is pointed at needs a fresh passkey check")
+		return
+	}
+
+	var t terminal.FocusTarget
+	if !DecodeJSON(w, r, &t) {
+		return
+	}
+	if err := s.terminal.Focus(r.Context(), t); err != nil {
+		if errors.Is(err, terminal.ErrNoFocusTarget) {
+			WriteError(w, http.StatusBadRequest, CodeValidation, err.Error())
+			return
+		}
+		WriteError(w, http.StatusConflict, CodeConflict, err.Error())
+		return
+	}
+	s.audit(r, "herdr.focus", firstNonEmpty(t.Agent, t.TabID, t.WorkspaceID), nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

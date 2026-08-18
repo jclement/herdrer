@@ -144,7 +144,15 @@ describe("reading the tree", () => {
     const sparse: HerdrState = {
       running: true,
       workspaces: [
-        { id: "w1", label: "", number: 1, focused: true, agent_status: "", tab_count: 0, pane_count: 0 },
+        {
+          id: "w1",
+          label: "",
+          number: 1,
+          focused: true,
+          agent_status: "",
+          tab_count: 0,
+          pane_count: 0,
+        },
       ],
     };
     expect(() => flattenPanes(sparse)).not.toThrow();

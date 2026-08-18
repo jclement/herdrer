@@ -176,7 +176,9 @@ function SheetAction({
     >
       <span className="mt-0.5 shrink-0 text-muted">{icon}</span>
       <span className="min-w-0 flex-1">
-        <span className={cx("block text-sm", danger ? "text-danger" : "text-heading")}>{label}</span>
+        <span className={cx("block text-sm", danger ? "text-danger" : "text-heading")}>
+          {label}
+        </span>
         {detail && <span className="mt-0.5 block text-xs text-muted">{detail}</span>}
       </span>
     </button>

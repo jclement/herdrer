@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { Bot, ChevronLeft, Inbox, Monitor, Moon, Settings, Sun, TerminalSquare } from "lucide-react";
+import {
+  Bot,
+  ChevronLeft,
+  Inbox,
+  Monitor,
+  Moon,
+  Settings,
+  Sun,
+  TerminalSquare,
+} from "lucide-react";
 import { useTheme } from "../lib/theme";
 import { taglineForDate } from "../lib/taglines";
 import { cx } from "./ui";

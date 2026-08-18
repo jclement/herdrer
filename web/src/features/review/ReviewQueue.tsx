@@ -89,6 +89,7 @@ const EMPTY_CTX: QueueCtx = {
   pinned: null,
   deferred: [],
   cooldownUntil: 0,
+  quietSince: null,
 };
 
 /** Routes that already show reviews: an overlay there would be a duplicate. */
@@ -105,6 +106,8 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   const [settled, setSettled] = useState<string[]>([]);
   const [pinned, setPinned] = useState<string | null>(null);
   const [cooldownUntil, setCooldownUntil] = useState(0);
+  /** Set whenever the human disposes of an item; cleared when they go looking. */
+  const [quietSince, setQuietSince] = useState<number | null>(null);
   const [interactive, setInteractiveState] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
   const [hot, setHot] = useState(false);
@@ -123,6 +126,7 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
     pinned,
     deferred,
     cooldownUntil,
+    quietSince,
   };
 
   const now = Date.now();
@@ -140,11 +144,7 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let timer = 0;
     const wakeIn = (now: number) => {
-      const wake = nextWakeAt(
-        { ...EMPTY_CTX, cooldownUntil },
-        hot ? lastInputRef.current : 0,
-        now,
-      );
+      const wake = nextWakeAt({ ...EMPTY_CTX, cooldownUntil }, hot ? lastInputRef.current : 0, now);
       return wake === null ? null : Math.max(16, wake - now);
     };
 
@@ -170,21 +170,25 @@ export function ReviewQueueProvider({ children }: { children: ReactNode }) {
 
   const setInteractive = useCallback((next: boolean) => setInteractiveState(next), []);
 
+  // Going looking is the opposite of being interrupted: it lifts the quiet.
   const openItem = useCallback((id: string) => {
     setDeferred((d) => d.filter((x) => x !== id));
     setPinned(id);
+    setQuietSince(null);
     setStackOpen(false);
   }, []);
 
   const defer = useCallback((id: string) => {
     setDeferred((d) => (d.includes(id) ? d : [...d, id]));
     setPinned((p) => (p === id ? null : p));
+    setQuietSince(Date.now());
   }, []);
 
   const settle = useCallback((id: string) => {
     setSettled((s) => (s.includes(id) ? s : [...s, id]));
     setPinned((p) => (p === id ? null : p));
     setCooldownUntil(Date.now() + ANSWER_COOLDOWN_MS);
+    setQuietSince(Date.now());
   }, []);
 
   const api = useMemo<ReviewQueueApi>(

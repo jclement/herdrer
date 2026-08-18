@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -29,6 +30,44 @@ func TestHerdrArgs(t *testing.T) {
 			if a == "attach" {
 				t.Fatalf("herdrArgs(%q) contains \"attach\", which Herdr rejects", s)
 			}
+		}
+	}
+}
+
+// TestFocusRejectsHostileIdentifiers is the guard on the one write herdrer
+// makes into Herdr. These values become argv for a subprocess and arrive from a
+// browser, so the allowlist is what keeps a focus call from becoming a way to
+// run something else.
+func TestFocusRejectsHostileIdentifiers(t *testing.T) {
+	svc := New(true, "")
+	for _, bad := range []string{
+		"; rm -rf /",
+		"$(whoami)",
+		"`id`",
+		"a b",
+		"--help",
+		"w1\nw2",
+		"", // empty is "no target"
+		"../../etc/passwd",
+	} {
+		err := svc.Focus(context.Background(), FocusTarget{Agent: bad})
+		if err == nil {
+			t.Errorf("Focus accepted hostile agent id %q", bad)
+		}
+	}
+}
+
+// TestFocusRequiresExactlyOneTarget keeps the intent unambiguous.
+func TestFocusRequiresExactlyOneTarget(t *testing.T) {
+	svc := New(true, "")
+	for _, tc := range []FocusTarget{
+		{},
+		{Agent: "a", TabID: "w1:t1"},
+		{Agent: "a", WorkspaceID: "w1"},
+		{Agent: "a", TabID: "w1:t1", WorkspaceID: "w1"},
+	} {
+		if err := svc.Focus(context.Background(), tc); err == nil {
+			t.Errorf("Focus accepted an ambiguous target %+v", tc)
 		}
 	}
 }

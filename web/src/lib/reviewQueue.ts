@@ -36,6 +36,12 @@ import type { ReviewItem, Urgency } from "./types";
  *      back to something later is the workflow, not an edge case.
  *   7. After an answer nothing auto-raises for ANSWER_COOLDOWN_MS, so a batch of
  *      three does not feel like being interrogated.
+ *   8. And once you have disposed of one — answered it or put it off — nothing
+ *      that was *already waiting* raises itself again. The rest peek, with a
+ *      count, until you go and get them. This is the anti-stampede rule: three
+ *      items arriving mid-command produce one sheet and one strip, never three
+ *      sheets in a row. Something that arrives *after* that moment is a new
+ *      event and may still interrupt, which is the whole point of `blocking`.
  *
  * A synthesized `herdr` row (a TUI pane sitting at its own prompt) never raises
  * anything: it carries no document, so a sheet for it would be an empty sheet.
@@ -75,6 +81,11 @@ export interface QueueCtx {
   deferred: readonly string[];
   /** No auto-raise before this epoch-ms. */
   cooldownUntil: number;
+  /**
+   * When the human last disposed of an item. Anything created at or before this
+   * may still peek, but will not raise itself again — see rule 8.
+   */
+  quietSince: number | null;
 }
 
 export interface QueuePlan {
@@ -135,6 +146,7 @@ export function canAutoRaise(item: QueueItem, ctx: QueueCtx): boolean {
   if (item.provisional) return false;
   if (ctx.deferred.includes(item.id)) return false;
   if (ctx.inputHot) return false;
+  if (ctx.quietSince !== null && createdAt(item) <= ctx.quietSince) return false;
   switch (item.urgency) {
     case "low":
       return false;
@@ -157,21 +169,32 @@ export function planQueue(items: readonly QueueItem[], ctx: QueueCtx, now: numbe
   const ordered = sortQueue(items);
   const open = ordered.length;
 
+  // 0 — on a route that *is* a review surface there is no overlay at all, not
+  // even one the human opened: they navigated to the page, and a sheet floating
+  // over the same document is two of the same thing with two Escape targets.
+  if (ctx.suppressed) return { sheet: null, peek: null, waiting: open, open };
+
   // 1 — an explicit open outranks everything, including a hot keyboard.
   if (ctx.pinned !== null && ordered.some((i) => i.id === ctx.pinned)) {
     return { sheet: ctx.pinned, peek: null, waiting: open - 1, open };
   }
 
-  const candidate = ordered.find((i) => !ctx.deferred.includes(i.id));
-  if (!candidate) return { sheet: null, peek: null, waiting: open, open };
+  const eligible = ordered.filter((i) => !ctx.deferred.includes(i.id));
+  if (eligible.length === 0) return { sheet: null, peek: null, waiting: open, open };
 
+  /*
+   * The most urgent thing that may raise itself, not merely the most urgent
+   * thing. Those differ exactly when rule 8 is in force: a question that was
+   * already waiting when you last put one down cannot raise itself, but one
+   * that arrived since can — and it is behind the older one in the order.
+   */
   const cooling = now < ctx.cooldownUntil;
-  if (!cooling && canAutoRaise(candidate, ctx)) {
-    return { sheet: candidate.id, peek: null, waiting: open - 1, open };
-  }
-  if (canPeek(candidate, ctx)) {
-    return { sheet: null, peek: candidate.id, waiting: open - 1, open };
-  }
+  const raiser = cooling ? undefined : eligible.find((i) => canAutoRaise(i, ctx));
+  if (raiser) return { sheet: raiser.id, peek: null, waiting: open - 1, open };
+
+  const peeker = eligible.find((i) => canPeek(i, ctx));
+  if (peeker) return { sheet: null, peek: peeker.id, waiting: open - 1, open };
+
   return { sheet: null, peek: null, waiting: open, open };
 }
 

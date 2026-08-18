@@ -174,6 +174,59 @@ export const api = {
     request<T>("DELETE", path, undefined, options),
 };
 
+/**
+ * Uploads a blob as the raw request body, reporting progress.
+ *
+ * XHR rather than fetch, for one reason: `upload.onprogress`. A 12 MiB screenshot
+ * over LTE takes long enough that a spinner with no number is indistinguishable
+ * from a hang, and the streaming-request API that would give fetch the same
+ * thing is not available on Safari.
+ *
+ * The envelope and the error codes are the same as everywhere else — this is a
+ * different transport, not a different contract.
+ */
+export function upload<T>(
+  path: string,
+  blob: Blob,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path, true);
+    xhr.withCredentials = true;
+    xhr.responseType = "text";
+    xhr.setRequestHeader("Accept", "application/json");
+    if (blob.type) xhr.setRequestHeader("Content-Type", blob.type);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded, e.total);
+    };
+    xhr.onerror = () => reject(new ApiError("Can't reach the box.", "NETWORK", 0));
+    xhr.onabort = () => reject(new ApiError("Upload cancelled.", "NETWORK", 0));
+    xhr.onload = () => {
+      let parsed: Envelope<T> | null = null;
+      try {
+        parsed = JSON.parse(xhr.responseText) as Envelope<T>;
+      } catch {
+        parsed = null;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const code = (parsed?.error?.code as ApiErrorCode | undefined) ?? fallbackCode(xhr.status);
+        reject(new ApiError(parsed?.error?.message ?? `${xhr.status}`, code, xhr.status));
+        return;
+      }
+      if (!parsed?.data) {
+        reject(
+          new ApiError("The server accepted it but sent nothing back.", "MALFORMED", xhr.status),
+        );
+        return;
+      }
+      resolve(parsed.data);
+    };
+    xhr.send(blob);
+  });
+}
+
 /** Absolute ws:// or wss:// URL for a same-origin socket path. */
 export function wsURL(path: string, params: Record<string, string | number>): string {
   const url = new URL(path, window.location.href);
