@@ -20,6 +20,7 @@ HERDRER_STATE_DIR = "{{config_root}}/state"
 [tasks.setup]
 description = "Zero to runnable: Go modules, web dependencies, state dir"
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 go mod download
 (cd web && bun install)
@@ -31,6 +32,7 @@ echo "Ready. 'mise run dev' starts the server and the SPA dev server."
 description = "Run the server and the Vite dev server together"
 depends = ["web:install"]
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 trap 'kill 0' EXIT
 (cd web && bun run dev) &
@@ -45,6 +47,7 @@ run = "go run ./cmd/herdrer serve"
 [tasks.test]
 description = "Full suite, non-interactive"
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 go test ./...
 if [ -d web/node_modules ]; then (cd web && bun run test --run); fi
@@ -53,6 +56,7 @@ if [ -d web/node_modules ]; then (cd web && bun run test --run); fi
 [tasks.lint]
 description = "Vet, format check and typecheck. Never mutates files"
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 test -z "$(gofmt -l ./cmd ./internal)" || { echo "gofmt needed:"; gofmt -l ./cmd ./internal; exit 1; }
 go vet ./...
@@ -62,6 +66,7 @@ if [ -d web/node_modules ]; then (cd web && bun run typecheck); fi
 [tasks.fmt]
 description = "The mutating counterpart of lint"
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 gofmt -w ./cmd ./internal
 if [ -d web/node_modules ]; then (cd web && bun run fmt); fi
@@ -83,6 +88,7 @@ outputs = ["web/node_modules/.bun-tag"]
 description = "Build the SPA into internal/webui/dist for embedding"
 depends = ["web:install"]
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 (cd web && bun run build)
 # Vite empties the output directory, which deletes the placeholder that keeps
@@ -99,6 +105,7 @@ KEEP
 description = "Build ./bin/herdrer for this machine, SPA embedded"
 depends = ["web:build"]
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o bin/herdrer ./cmd/herdrer
@@ -109,6 +116,7 @@ echo "bin/herdrer $VERSION"
 description = "Cross-compile a static linux/amd64 binary into ./dist"
 depends = ["web:build"]
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
 mkdir -p dist
@@ -128,6 +136,7 @@ run = "./scripts/deploy.sh"
 [tasks."db:new"]
 description = "Scaffold a numbered migration: mise run db:new add_widgets"
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 NAME="${1:?usage: mise run db:new <name>}"
 N=$(printf '%04d' $(( $(ls internal/migrations/*.sql 2>/dev/null | wc -l | tr -d ' ') + 1 )))
@@ -144,6 +153,7 @@ run = "rm -rf bin dist internal/webui/dist web/dist"
 description = "Also blow away local state and node_modules"
 depends = ["clean"]
 run = """
+#!/usr/bin/env bash
 set -euo pipefail
 rm -rf web/node_modules
 read -p "Delete local database and passkeys in ./state? [y/N]: " C
