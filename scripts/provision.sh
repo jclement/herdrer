@@ -11,8 +11,8 @@
 #   2. enables systemd linger for that user, so its user services start at boot
 #      and survive logout
 #   3. installs Caddy from its official apt repository
-#   4. installs deploy/Caddyfile and reloads Caddy (which obtains the
-#      Let's Encrypt certificate over HTTP-01)
+#   4. installs deploy/Caddyfile and reloads Caddy, bound to this node's
+#      Tailscale addresses and serving a certificate fetched from tailscaled
 #   5. configures ufw: deny incoming, allow 22, 80, 443
 #   6. installs deploy/herdrer.service as a systemd *user* unit and enables it
 #   7. installs mise for the user
@@ -25,9 +25,11 @@
 # Assumes:
 #   * Ubuntu 24.04 or newer (verified against 26.04, systemd 259)
 #   * running as root, with network access to apt and dl.cloudsmith.io
-#   * DNS for --domain already resolves to this box's public IP, or the
-#     Let's Encrypt HTTP-01 challenge in step 4 will fail (Caddy retries, so
-#     this is recoverable — fix DNS and `systemctl reload caddy`)
+#   * tailscaled is up and this node is logged in — --domain is its MagicDNS
+#     name, and both the bind addresses and the certificate come from it. No
+#     public DNS record and no inbound 80/443 are involved (Caddy retries, so
+#     a tailnet that is not up yet is recoverable — fix it and
+#     `systemctl reload caddy`)
 #   * /root/.ssh/authorized_keys holds the operator's key, unless --ssh-key
 #
 # Getting it here:
@@ -43,6 +45,11 @@ DOMAIN="${HERDRER_DEPLOY_DOMAIN:-}"
 # Where herdrer listens. Loopback only, always: Caddy owns the public ports, and
 # the process that forks shells should never hold one.
 LISTEN_ADDR="${HERDRER_DEPLOY_ADDR:-127.0.0.1:7799}"
+# Addresses Caddy binds. Defaults to this node's Tailscale addresses, so herdrer
+# is reachable on the tailnet and nowhere else. Empty means "work it out from
+# tailscale ip" — see preflight; there is deliberately no fallback to 0.0.0.0,
+# because the failure mode of guessing wrong here is a public terminal server.
+BIND="${HERDRER_DEPLOY_BIND:-}"
 SSH_KEY_SRC=""
 DRY_RUN=0
 SKIP_CADDY=0
@@ -87,9 +94,11 @@ usage() {
 usage: provision.sh [options]
 
   --user NAME        user that owns and runs herdrer (default: $APP_USER)
-  --domain NAME      public hostname (REQUIRED, no default)
+  --domain NAME      this node's tailnet name (REQUIRED, no default)
   --addr HOST:PORT   loopback listener herdrer binds (default: $LISTEN_ADDR)
                      must match the site block in deploy/Caddyfile
+  --bind ADDRS       addresses Caddy listens on, space separated
+                     (default: this node's tailscale ip -4 and -6)
   --ssh-key FILE     authorized_keys source (default: /root/.ssh/authorized_keys)
   --caddyfile FILE   Caddyfile to install (default: deploy/Caddyfile)
   --unit FILE        systemd user unit to install (default: deploy/herdrer.service)
@@ -108,6 +117,7 @@ while [ $# -gt 0 ]; do
 		--user)      APP_USER="${2:?--user needs a value}"; shift 2 ;;
 		--domain)    DOMAIN="${2:?--domain needs a value}"; shift 2 ;;
 		--addr)      LISTEN_ADDR="${2:?--addr needs a value}"; shift 2 ;;
+		--bind)      BIND="${2:?--bind needs a value}"; shift 2 ;;
 		--ssh-key)   SSH_KEY_SRC="${2:?--ssh-key needs a value}"; shift 2 ;;
 		--caddyfile) CADDYFILE_SRC="${2:?--caddyfile needs a value}"; shift 2 ;;
 		--unit)      UNIT_SRC="${2:?--unit needs a value}"; shift 2 ;;
@@ -133,6 +143,15 @@ command -v systemctl >/dev/null || die "no systemd here; this script targets Ubu
 if [ -z "$DOMAIN" ]; then
 	die "no domain: pass --domain example.com (or set HERDRER_DEPLOY_DOMAIN)"
 fi
+# Caddy listens on the tailnet only. Derive it rather than make the operator
+# type two addresses, but never invent one: binding the wrong thing here does
+# not fail loudly, it publishes a shell-forking service to the internet.
+if [ -z "$BIND" ] && [ "$SKIP_CADDY" -eq 0 ]; then
+	BIND="$(tailscale ip -4 2>/dev/null || true) $(tailscale ip -6 2>/dev/null || true)"
+	BIND="$(printf '%s' "$BIND" | xargs || true)"
+	[ -n "$BIND" ] || die "no --bind and tailscale ip returned nothing — is tailscaled up and this node logged in?"
+fi
+
 if [ "$SKIP_CADDY" -eq 0 ] && ! grep -q '__DOMAIN__' "$CADDYFILE_SRC"; then
 	warn "$CADDYFILE_SRC has no __DOMAIN__ placeholder — is it really the template?"
 fi
@@ -190,6 +209,7 @@ render_to_stdout() {
 	_esc() { printf '%s' "$1" | sed -e 's/[&/\\]/\\&/g'; }
 	sed \
 		-e "s/__DOMAIN__/$(_esc "$DOMAIN")/g" \
+		-e "s/__BIND__/$(_esc "$BIND")/g" \
 		-e "s/__ADDR__/$(_esc "$LISTEN_ADDR")/g" \
 		-e "s/__UPSTREAM__/$(_esc "$LISTEN_ADDR")/g" \
 		-e "s/__USER__/$(_esc "$APP_USER")/g" \
@@ -341,6 +361,46 @@ else
 	# access log there and Caddy refuses to start if it cannot.
 	run install -d -m 0755 -o caddy -g caddy /var/log/caddy
 
+	# Caddy fetches the *.ts.net certificate over the tailscaled LocalAPI, which
+	# is root-only until TS_PERMIT_CERT_UID names the user allowed to ask. Without
+	# it Caddy starts normally and then serves no certificate — a failure you find
+	# in a browser, not in a log — so assert it here.
+	step "tailscale certificate access for caddy"
+	if grep -q '^TS_PERMIT_CERT_UID=' /etc/default/tailscaled 2>/dev/null; then
+		skip "TS_PERMIT_CERT_UID already set"
+	elif [ "$DRY_RUN" -eq 1 ]; then
+		printf '  %s$ append TS_PERMIT_CERT_UID=caddy to /etc/default/tailscaled%s\n' "$C_DIM" "$C_OFF"
+	else
+		cat >> /etc/default/tailscaled <<'TSENV'
+
+# Lets the non-root caddy user fetch this node's Tailscale certificate.
+TS_PERMIT_CERT_UID=caddy
+TSENV
+		run systemctl restart tailscaled
+		ok "caddy may now fetch the tailnet certificate"
+	fi
+
+	# Caddy binds addresses that do not exist until tailscaled has brought up
+	# tailscale0. Ordering alone still races the address assignment, so retry too.
+	step "caddy service ordering"
+	run install -d -m 0755 /etc/systemd/system/caddy.service.d
+	if [ "$DRY_RUN" -eq 0 ]; then
+		cat > /etc/systemd/system/caddy.service.d/tailscale.conf <<'DROPIN'
+# Caddy binds this box's Tailscale addresses, which do not exist until
+# tailscaled has brought up tailscale0. Ordering alone is not enough — the
+# address can still be a moment behind the unit — so retry rather than die.
+[Unit]
+After=tailscaled.service
+Wants=tailscaled.service
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+DROPIN
+		run systemctl daemon-reload
+	fi
+	ok "caddy ordered after tailscaled"
+
 	step "Caddyfile for $DOMAIN"
 
 	if [ "$DRY_RUN" -eq 0 ] && cmp -s <(render_to_stdout "$CADDYFILE_SRC") /etc/caddy/Caddyfile; then
@@ -377,7 +437,7 @@ else
 		run systemctl restart caddy
 		ok "caddy started"
 	fi
-	printf '  %sCaddy now requests a Let'\''s Encrypt certificate for %s over HTTP-01.%s\n' "$C_DIM" "$DOMAIN" "$C_OFF"
+	printf '  %sCaddy serves %s on %s, with a certificate from tailscaled.%s\n' "$C_DIM" "$DOMAIN" "$BIND" "$C_OFF"
 	printf '  %sWatch it:  journalctl -u caddy -f%s\n' "$C_DIM" "$C_OFF"
 fi
 

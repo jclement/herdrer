@@ -1,15 +1,25 @@
-# deploy/Caddyfile.template — the public edge for herdrer.
+# deploy/Caddyfile.template — the tailnet edge for herdrer.
 #
-# This is a TEMPLATE. scripts/provision.sh substitutes __DOMAIN__ and
-# __UPSTREAM__ and writes the result to /etc/caddy/Caddyfile. Do not edit the
+# This is a TEMPLATE. scripts/provision.sh substitutes __DOMAIN__, __UPSTREAM__
+# and __BIND__ and writes the result to /etc/caddy/Caddyfile. Do not edit the
 # rendered file on the box; edit this and re-run provision.sh, or your change
 # is one `provision.sh` away from being overwritten.
 #
 # What it does:
-#   * terminates TLS with a Let's Encrypt certificate obtained over HTTP-01
-#     (the name already resolves to this box's public IP and ufw opens 80/443,
-#     which is everything HTTP-01 needs)
+#   * listens ONLY on __BIND__ — this box's Tailscale addresses, never the
+#     public NIC. herdrer forks shells on a box holding sensitive data, so it
+#     has no business being reachable from the internet, and a bind is the one
+#     control that still holds when a firewall rule is loosened by mistake.
+#   * terminates TLS with a real Let's Encrypt certificate for the *.ts.net
+#     name, fetched from tailscaled rather than obtained by Caddy. Tailscale
+#     owns the ts.net zone and validates over DNS-01, so this needs no inbound
+#     80/443 and no public DNS record. Renewal is tailscaled's job, not Caddy's.
 #   * reverse-proxies every request to herdrer on __UPSTREAM__
+#
+# Requires TS_PERMIT_CERT_UID=caddy in /etc/default/tailscaled. Fetching a cert
+# over the tailscaled LocalAPI is root-only until that names the non-root user
+# allowed to ask, and the failure is quiet: Caddy starts normally and then
+# serves no certificate at all.
 #
 # Why there is a proxy at all: herdrer forks shells. The process that forks
 # shells should not be the one holding CAP_NET_BIND_SERVICE on a public
@@ -18,11 +28,19 @@
 #
 # Assumes: Caddy >= 2.7 from the official Cloudsmith apt repo, running as the
 # system `caddy` user, with /var/log/caddy writable by it (the .deb creates it).
+# `tls.get_certificate.tailscale` ships in the standard Caddy build.
 #
 # Rendered to /etc/caddy/Caddyfile by scripts/provision.sh.
 # After editing:  sudo caddy validate --config /etc/caddy/Caddyfile
 #                 sudo systemctl reload caddy
 {
+	# Bind every listener to the tailnet only. Caddy resolves these once at
+	# startup, so caddy.service must order itself after tailscaled and retry on
+	# failure — provision.sh installs the drop-in that does both. Without this
+	# bind Caddy would answer on the public NIC the moment a firewall rule
+	# changed, which is exactly the mistake the bind exists to survive.
+	default_bind __BIND__
+
 	# Uncomment with a real address to receive Let's Encrypt expiry warnings.
 	# Caddy renews automatically, so this is a safety net, not a requirement.
 	# email you@example.com
@@ -54,6 +72,16 @@
 }
 
 __DOMAIN__ {
+	# The certificate comes from tailscaled, not from Caddy's ACME client. This
+	# name resolves and is reachable only inside the tailnet, so neither HTTP-01
+	# nor TLS-ALPN could ever be validated from outside; Tailscale holds the
+	# ts.net zone, does DNS-01 on our behalf, and owns renewal. Removing this
+	# block does not fall back to something that works — Caddy would start
+	# requesting a public certificate it can never be issued.
+	tls {
+		get_certificate tailscale
+	}
+
 	log {
 		output file /var/log/caddy/herdrer.access.log {
 			roll_size 20MiB

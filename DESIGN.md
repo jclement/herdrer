@@ -1033,7 +1033,8 @@ rather than left to `defaultOrigin()`, which would derive `http://…` from `TLS
 
 Two scripts, and the split between them is deliberate. **`provision.sh` runs once, on the box, as
 root**: it creates the user with the operator's SSH key, enables linger, installs Caddy from its
-apt repo, installs the Caddyfile and reloads (which triggers the HTTP-01 challenge), sets ufw to
+apt repo, installs the Caddyfile and reloads (Caddy binds the tailnet addresses and fetches the
+*.ts.net certificate from tailscaled), sets ufw to
 deny-incoming / allow 22, 80, 443, installs and enables the user unit, and installs mise. It is
 idempotent and prints `skip` for anything already done, and it deliberately does **not** install or
 start herdrer — there is no binary yet, and starting a service that will mint an enrollment token is
