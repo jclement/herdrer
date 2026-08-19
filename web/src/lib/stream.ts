@@ -97,6 +97,13 @@ export function useStream(enabled: boolean): StreamState {
           }
           void qc.invalidateQueries({ queryKey: qk.bootstrap });
           break;
+        case "task.updated":
+          void qc.invalidateQueries({ queryKey: qk.tasks });
+          if (typeof msg.id === "string") {
+            void qc.invalidateQueries({ queryKey: qk.task(msg.id) });
+          }
+          void qc.invalidateQueries({ queryKey: qk.bootstrap });
+          break;
         case "agent.status":
           void qc.invalidateQueries({ queryKey: qk.agents });
           void qc.invalidateQueries({ queryKey: qk.herdrState });
@@ -115,6 +122,7 @@ export function useStream(enabled: boolean): StreamState {
       // The screen must be correct within one round trip, before the socket is back.
       void qc.invalidateQueries({ queryKey: qk.bootstrap });
       void qc.invalidateQueries({ queryKey: ["reviews"] });
+      void qc.invalidateQueries({ queryKey: qk.tasks });
       void qc.invalidateQueries({ queryKey: qk.herdrState });
       if (socketRef.current?.readyState === WebSocket.OPEN) return;
       attemptRef.current = 0;

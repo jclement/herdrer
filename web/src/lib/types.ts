@@ -39,7 +39,12 @@ export interface Bootstrap {
   user: User;
   version: string;
   terminal_enabled: boolean;
-  counts: { review_open: number; agents_blocked: number };
+  counts: {
+    review_open: number;
+    agents_blocked: number;
+    tasks_attention?: number;
+    tasks_active?: number;
+  };
   vapid_public_key: string | null;
   /** Whether this session has asserted a passkey inside the step-up window. */
   stepped_up?: boolean;
@@ -104,15 +109,66 @@ export interface ReviewItem {
   source?: string;
 }
 
+/* --- tasks --------------------------------------------------------------------
+ *
+ * A task is delegated work: filed by the human, dispatched to a Claude Code
+ * worker under Herdr by the Go coordinator, delivered back through the review
+ * inbox. The lifecycle lives server-side in SQLite; this UI renders rows and
+ * never infers state.
+ */
+
+export type TaskStatus =
+  | "inbox"
+  | "ready"
+  | "dispatching"
+  | "doing"
+  | "blocked"
+  | "review"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export type TaskKind = "change" | "investigate" | "chore";
+
 export interface Task {
   id: string;
-  body: string;
-  scope?: string | null;
-  status?: string;
-  created_at?: string;
-  claimed_at?: string | null;
-  completed_at?: string | null;
+  title: string;
+  kind: TaskKind;
+  repo: string;
+  branch: string;
+  priority: number;
+  status: TaskStatus;
+  claimed_by?: string | null;
+  worktree: string;
+  attempt: number;
   result?: string | null;
+  has_tail: boolean;
+  created_at: string;
+  updated_at: string;
+  dispatched_at?: string | null;
+  accepted_at?: string | null;
+  finished_at?: string | null;
+  /** Present on the detail response only. */
+  body_md?: string;
+}
+
+export interface TaskEvent {
+  at: string;
+  actor: string;
+  kind: string;
+  detail: string;
+}
+
+/** `GET /api/v1/tasks/{id}` — the task plus its timeline and linked items. */
+export interface TaskDetail extends Task {
+  body_md: string;
+  events: TaskEvent[];
+  items: ReviewItem[];
+}
+
+export interface TaskTail {
+  tail?: string | null;
+  tail_at?: string | null;
 }
 
 export interface AgentRow {

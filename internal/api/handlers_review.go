@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/jclement/herdrer/internal/review"
 	"github.com/jclement/herdrer/internal/store"
 )
@@ -28,6 +26,9 @@ func serializeItem(it *store.ReviewItem, full bool) map[string]any {
 		"created_at": it.CreatedAt, "expires_at": it.ExpiresAt,
 		"answered_at": it.AnsweredAt, "answer_value": it.AnswerValue,
 		"answer_note": it.AnswerNote, "source": "agent",
+	}
+	if it.TaskID != nil {
+		m["task_id"] = *it.TaskID
 	}
 	if it.Status == store.StatusExpired {
 		m["recommend"] = nil
@@ -177,53 +178,6 @@ func (s *Server) handleRenderReview(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(doc))
 }
 
-// --- tasks: the reverse channel --------------------------------------------------
-
-type taskReq struct {
-	Body  string `json:"body"`
-	Scope string `json:"scope"`
-}
-
-func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	var req taskReq
-	if !DecodeJSON(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Body) == "" {
-		WriteError(w, http.StatusBadRequest, CodeValidation, "body is required")
-		return
-	}
-	u := UserFrom(r.Context())
-	now := time.Now()
-	it := &store.ReviewItem{
-		ID: "tk_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16], UserID: u.ID,
-		Direction: "task", Kind: review.KindManual, Title: firstLine(req.Body),
-		BodyMD: req.Body, Urgency: review.UrgencyNormal, Status: store.StatusOpen,
-		Context:   map[string]any{"scope": req.Scope},
-		CreatedAt: now, ExpiresAt: now.Add(30 * 24 * time.Hour),
-	}
-	if err := s.st.CreateReviewItem(r.Context(), it); err != nil {
-		Internal(w, err, "create task")
-		return
-	}
-	s.audit(r, "task.created", it.ID, nil)
-	WriteJSON(w, http.StatusCreated, serializeItem(it, true))
-}
-
-func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	items, err := s.st.ListReviewItems(r.Context(), u.ID, "task", r.URL.Query().Get("status"), 200)
-	if err != nil {
-		Internal(w, err, "list tasks")
-		return
-	}
-	out := make([]map[string]any, 0, len(items))
-	for _, it := range items {
-		out = append(out, serializeItem(it, true))
-	}
-	WriteList(w, http.StatusOK, out, Meta{Total: len(out), Page: 1, PerPage: len(out)})
-}
-
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i > 0 {
 		s = s[:i]
@@ -345,35 +299,6 @@ func (s *Server) handleAgentListReview(w http.ResponseWriter, r *http.Request) {
 		out = append(out, serializeItem(it, false))
 	}
 	WriteList(w, http.StatusOK, out, Meta{Total: len(out), Page: 1, PerPage: len(out)})
-}
-
-func (s *Server) handleAgentClaimTask(w http.ResponseWriter, r *http.Request) {
-	t := TokenFrom(r.Context())
-	it, err := s.st.ClaimTask(r.Context(), t.UserID, "token:"+t.ID)
-	if err != nil {
-		WriteError(w, http.StatusNotFound, CodeNotFound, "no pending tasks")
-		return
-	}
-	s.audit(r, "task.claimed", it.ID, nil)
-	WriteJSON(w, http.StatusOK, serializeItem(it, true))
-}
-
-type completeReq struct {
-	Result string `json:"result"`
-}
-
-func (s *Server) handleAgentCompleteTask(w http.ResponseWriter, r *http.Request) {
-	t := TokenFrom(r.Context())
-	var req completeReq
-	if !DecodeJSON(w, r, &req) {
-		return
-	}
-	if err := s.st.CompleteTask(r.Context(), r.PathValue("id"), "token:"+t.ID, req.Result); err != nil {
-		WriteError(w, http.StatusNotFound, CodeNotFound, "no such claimed task")
-		return
-	}
-	s.audit(r, "task.completed", r.PathValue("id"), nil)
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleAgentUploadAsset accepts an image from an agent and returns an id to

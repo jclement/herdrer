@@ -15,6 +15,18 @@ Two things can be waiting on you, and in your pocket they feel identical:
   recommendation attached; and
 - a **Herdr agent that went `blocked`** at its own TUI prompt.
 
+And since the box can already start agents, herdrer now answers the reverse question too:
+**"here is what I need done."** A **task** filed from the browser is claimed by a deterministic
+Go dispatcher that opens a git worktree, starts a dedicated Claude Code worker under Herdr,
+briefs it, watches it, and delivers the result back through the same review inbox. The plan
+lives in SQLite rows, not in any model's context — the coordinator cannot lose track, because
+the coordinator is not an LLM. `docs/BRIEF-tasks.md` is the design brief; the lifecycle is
+`inbox → ready → dispatching → doing ⇄ blocked → review → done`, a worker that vanishes or goes
+quiet is reaped with its terminal output captured as evidence, and **no task-authored byte ever
+passes through `agent.prompt`** — the poke is a constant template plus server-minted ids, and
+the body travels the authenticated API under a "task is a request, not an authorization"
+envelope.
+
 herdrer merges them into one list, sorted oldest-waiting first, behind a passkey. Tap a review and
 answer it in two taps. Tap a blocked agent and you get its screen, `agent.explain`'s prose, and an
 approve/deny row. If neither is enough, a real terminal mirror is one tap further down.
@@ -103,6 +115,7 @@ The whole CLI surface:
 | `herdrer serve` | Run the server. The default when no verb is given |
 | `herdrer enroll [--label <name>] [--ttl <dur>]` | Mint a one-time passkey registration code. Defaults to `HERDRER_ENROLL_TTL_MINUTES` |
 | `herdrer token create --name <name> [--scopes review:write,review:read] [--user <id>]` | Mint an agent token. The `sk_` secret is printed once and never stored |
+| `herdrer task add [--repo <r>] [--ready] [title, or stdin]` | File a task from the shell — the one filing surface a browser can't match is piping a failing command's output in. Everything else about tasks is web-only |
 | `herdrer version` | Version, commit, build date |
 
 Everything is configured from the environment; there is no config file.
@@ -149,6 +162,21 @@ committed `.env.sample` mirrors this table.
 |---|---|---|
 | `HERDRER_HERDR_CONFIG_DIR` | — (autodetect) | Directory holding `herdr.sock` and `sessions/<name>/herdr.sock`. Empty means look under the run-as user's XDG config. |
 | `HERDRER_TERMINAL_ENABLED` | `true` | Set `false` for a review-only deployment: no PTY, no Herdr control verbs, **no shell reachable from any HTTP path**. |
+
+### Tasks
+
+| Variable | Default | What it does |
+|---|---|---|
+| `HERDRER_REPO_ROOT` | `~/Developer` | Repos a task may name live under this root; anything else fails the task rather than dispatching. |
+| `HERDRER_WORKER_CAP` | `2` | Concurrent workers. One writer per repo holds regardless. |
+| `HERDRER_ACCEPT_TIMEOUT_MINUTES` | `5` | How long a dispatched worker has to call `accept` before the dispatch is judged failed and retried. |
+| `HERDRER_NUDGE_AFTER_MINUTES` | `10` | Worker silence before the one nudge per quiet period. |
+| `HERDRER_GIVE_UP_AFTER_MINUTES` | `30` | Silence after which the task is held for review with its terminal capture. |
+| `HERDRER_TASK_TAIL_MAX_BYTES` | `16384` | Cap on captured terminal evidence. Replaced, not appended; never search-indexed. |
+| `HERDRER_MAX_ATTEMPTS` | `2` | Dispatch attempts before the task fails loudly. |
+
+Dispatch as a whole is gated on `HERDRER_TERMINAL_ENABLED` — starting an agent and prompting it
+is a shell, so a review-only deployment keeps the queue visible and runs nothing.
 
 ### Notifications
 

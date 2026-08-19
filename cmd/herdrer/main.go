@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/jclement/herdrer/internal/paste"
 	"github.com/jclement/herdrer/internal/review"
 	"github.com/jclement/herdrer/internal/store"
+	"github.com/jclement/herdrer/internal/tasks"
 	"github.com/jclement/herdrer/internal/terminal"
 )
 
@@ -46,6 +48,8 @@ func main() {
 		err = cmdEnroll(os.Args[2:])
 	case "token":
 		err = cmdToken(os.Args[2:])
+	case "task":
+		err = cmdTask(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("herdrer", version)
 	case "help", "--help", "-h":
@@ -69,6 +73,7 @@ Usage:
   herdrer token create [flags]     Mint an agent API token
   herdrer token list               Show agent tokens and their state
   herdrer token revoke <id>        Revoke an agent token immediately
+  herdrer task add [flags] [title] Queue a task for the dispatcher (or pipe stdin)
   herdrer version
 
 Registration requires a code minted on this machine. There is no open signup,
@@ -149,8 +154,21 @@ func cmdServe(args []string) error {
 		return err
 	}
 
+	// The coordinator: deterministic Go owns the queue, the claims and the
+	// reap; Claude Code appears only as per-task workers it starts under
+	// Herdr. Gated on the terminal switch because starting an agent and
+	// prompting it is a shell.
+	tasksSvc := tasks.New(st, termSvc, reviewSvc, bus, notifySvc, tasks.Options{
+		RepoRoot: cfg.RepoRoot, WorkerCap: cfg.WorkerCap,
+		AcceptTimeout: cfg.AcceptTimeout, NudgeAfter: cfg.NudgeAfter,
+		GiveUpAfter: cfg.GiveUpAfter, TailMaxBytes: cfg.TailMaxBytes,
+		MaxAttempts: cfg.MaxAttempts, Origin: cfg.Origin,
+	})
+	reviewSvc.SetResolvedHook(tasksSvc.OnReviewResolved)
+	tasksSvc.Run(ctx)
+
 	srv := api.NewServer(cfg, st, authSvc, reviewSvc, termSvc, ptys, notifySvc, bus,
-		pastes, assets, version)
+		pastes, assets, tasksSvc, version)
 
 	// Teach the agents on this box about herdrer, and give them a credential.
 	//
@@ -420,6 +438,85 @@ func cmdTokenRevoke(args []string) error {
 		}
 	}
 	return fmt.Errorf("no such token: %s", id)
+}
+
+// --- task -------------------------------------------------------------------------
+
+// cmdTask files a task from the shell, on the box, straight into the database.
+// This exists for one reason a browser cannot match: piping a failing
+// command's output into the body. Everything else about tasks — triage,
+// cancel, retry, watching — is deliberately web-only.
+func cmdTask(args []string) error {
+	if len(args) == 0 || args[0] != "add" {
+		return fmt.Errorf("usage: herdrer task add [--repo <r>] [--ready] [title, or stdin]")
+	}
+	fs := flag.NewFlagSet("task add", flag.ExitOnError)
+	repo := fs.String("repo", "", "repo the task is bound to, relative to HERDRER_REPO_ROOT")
+	ready := fs.Bool("ready", false, "file straight to ready (triaged, dispatchable)")
+	kind := fs.String("kind", "change", "change | investigate | chore")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	body := strings.Join(fs.Args(), " ")
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+		piped, err := io.ReadAll(io.LimitReader(os.Stdin, 64*1024))
+		if err != nil {
+			return err
+		}
+		if body == "" {
+			body = string(piped)
+		} else {
+			body = body + "\n\n```\n" + strings.TrimRight(string(piped), "\n") + "\n```\n"
+		}
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fmt.Errorf("nothing to file: pass a title, pipe a body, or both")
+	}
+
+	ctx := context.Background()
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return fmt.Errorf("no users registered yet — run `herdrer enroll` first")
+	}
+
+	title := body
+	if i := strings.IndexByte(title, '\n'); i > 0 {
+		title = title[:i]
+	}
+	if len(title) > 120 {
+		title = title[:120]
+	}
+	status := "inbox"
+	if *ready {
+		status = "ready"
+	}
+	now := time.Now()
+	t := &store.Task{
+		ID:     "tk_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
+		UserID: users[0].ID, Title: strings.TrimSpace(title), BodyMD: body,
+		Kind: *kind, Repo: strings.Trim(*repo, "/"), Status: status,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateTask(ctx, t, "cli"); err != nil {
+		return err
+	}
+	st.Audit(ctx, store.AuditEntry{Actor: "system", Kind: "task.created",
+		Subject: t.ID, Detail: map[string]any{"via": "cli", "status": status}})
+	fmt.Printf("filed %s (%s) — %s\n", t.ID, status, t.Title)
+	if !*ready {
+		fmt.Println("it sits in the inbox until you mark it ready in the browser (or pass --ready)")
+	}
+	return nil
 }
 
 // openStore is the shared setup for CLI verbs that touch the database.

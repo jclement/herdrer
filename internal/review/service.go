@@ -58,6 +58,30 @@ type Service struct {
 	// resolves the item.
 	mu      sync.Mutex
 	waiters map[string][]chan struct{}
+
+	// onResolved fires after an item leaves the open state — answered,
+	// cancelled or expired — with the item as it now stands. The task
+	// subsystem hangs off this to advance task state; review itself neither
+	// knows nor cares what a task is.
+	onResolved func(ctx context.Context, it *store.ReviewItem)
+}
+
+// SetResolvedHook installs the post-resolution callback. Call before traffic.
+func (s *Service) SetResolvedHook(fn func(ctx context.Context, it *store.ReviewItem)) {
+	s.onResolved = fn
+}
+
+// resolved loads the item fresh and fires the hook. Failures are swallowed:
+// the resolution itself already happened, and the hook is a follower.
+func (s *Service) resolved(ctx context.Context, id string) {
+	if s.onResolved == nil {
+		return
+	}
+	it, err := s.st.GetReviewItem(context.WithoutCancel(ctx), id)
+	if err != nil {
+		return
+	}
+	s.onResolved(context.WithoutCancel(ctx), it)
 }
 
 // New builds the service.
@@ -277,6 +301,7 @@ func (s *Service) Answer(ctx context.Context, id, userID, value, note string) (*
 	}
 	s.wake(id)
 	s.publish(userID, map[string]any{"type": "review.answered", "id": id})
+	s.resolved(ctx, id)
 	return out, nil
 }
 
@@ -307,6 +332,7 @@ func (s *Service) Cancel(ctx context.Context, id string, tokenID, userID *string
 		return err
 	}
 	s.wake(id)
+	s.resolved(ctx, id)
 	return nil
 }
 
@@ -422,6 +448,7 @@ func (s *Service) StartSweeper(ctx context.Context) {
 				for _, id := range ids {
 					slog.Info("review item expired", "id", id)
 					s.wake(id)
+					s.resolved(ctx, id)
 				}
 				if err := s.st.PurgeExpired(ctx); err != nil {
 					slog.Error("purge failed", "err", err)

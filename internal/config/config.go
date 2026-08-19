@@ -59,6 +59,18 @@ type Config struct {
 	MaxOpenItems       int
 	DefaultExpiryHours int
 	MaxExpiryHours     int
+
+	// The task dispatcher. RepoRoot bounds which checkouts a task may name;
+	// WorkerCap bounds concurrent workers; the timeouts drive the accept /
+	// nudge / give-up ladder in internal/tasks. Dispatch as a whole is gated on
+	// TerminalEnabled — starting an agent and prompting it is a shell.
+	RepoRoot      string
+	WorkerCap     int
+	AcceptTimeout time.Duration
+	NudgeAfter    time.Duration
+	GiveUpAfter   time.Duration
+	TailMaxBytes  int
+	MaxAttempts   int
 }
 
 // Load reads configuration from the environment, applies defaults, and
@@ -102,6 +114,14 @@ func Load() (*Config, error) {
 	c.MaxOpenItems = envInt("HERDRER_MAX_OPEN_ITEMS", 50)
 	c.DefaultExpiryHours = envInt("HERDRER_DEFAULT_EXPIRY_HOURS", 24)
 	c.MaxExpiryHours = envInt("HERDRER_MAX_EXPIRY_HOURS", 168)
+
+	c.RepoRoot = env("HERDRER_REPO_ROOT", defaultRepoRoot())
+	c.WorkerCap = envInt("HERDRER_WORKER_CAP", 2)
+	c.AcceptTimeout = time.Duration(envInt("HERDRER_ACCEPT_TIMEOUT_MINUTES", 5)) * time.Minute
+	c.NudgeAfter = time.Duration(envInt("HERDRER_NUDGE_AFTER_MINUTES", 10)) * time.Minute
+	c.GiveUpAfter = time.Duration(envInt("HERDRER_GIVE_UP_AFTER_MINUTES", 30)) * time.Minute
+	c.TailMaxBytes = envInt("HERDRER_TASK_TAIL_MAX_BYTES", 16384)
+	c.MaxAttempts = envInt("HERDRER_MAX_ATTEMPTS", 2)
 
 	// The origin defaults to something consistent with the TLS mode so that a
 	// minimal configuration (domain only) still produces a working RP origin.
@@ -178,7 +198,21 @@ func (c *Config) validate() error {
 		return fmt.Errorf("HERDRER_MAX_EXPIRY_HOURS (%d) is below HERDRER_DEFAULT_EXPIRY_HOURS (%d)",
 			c.MaxExpiryHours, c.DefaultExpiryHours)
 	}
+	if c.WorkerCap < 1 {
+		return fmt.Errorf("HERDRER_WORKER_CAP must be at least 1")
+	}
+	if c.MaxAttempts < 1 {
+		return fmt.Errorf("HERDRER_MAX_ATTEMPTS must be at least 1")
+	}
 	return nil
+}
+
+func defaultRepoRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Developer")
 }
 
 // Secure reports whether cookies should carry the Secure attribute. Loopback

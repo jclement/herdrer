@@ -140,6 +140,11 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if s.notify != nil {
 		vapid = s.notify.PublicKey()
 	}
+	taskCounts, err := s.st.CountTasks(r.Context(), u.ID)
+	if err != nil {
+		Internal(w, err, "count tasks")
+		return
+	}
 	sess := SessionFrom(r.Context())
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"user":                   publicUser(u),
@@ -151,6 +156,10 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		"counts": map[string]int{
 			"review_open":    openItems,
 			"agents_blocked": s.terminal.CountBlocked(r.Context()),
+			// The Tasks badge: what is waiting on the human, not what is busy.
+			"tasks_attention": taskCounts[store.TaskReview] + taskCounts[store.TaskFailed],
+			"tasks_active": taskCounts[store.TaskDispatching] + taskCounts[store.TaskDoing] +
+				taskCounts[store.TaskBlocked],
 		},
 		"vapid_public_key": vapid,
 	})

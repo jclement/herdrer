@@ -40,6 +40,11 @@ type ReviewItem struct {
 	ClaimedBy   *string
 	ClaimedAt   *time.Time
 
+	// TaskID links an item to the task whose worker raised it: the task's
+	// questions and its final review are ordinary inbox items that carry this
+	// back-pointer. Set server-side only, never by the submitting agent.
+	TaskID *string
+
 	Attachments []Attachment
 }
 
@@ -95,11 +100,11 @@ func (s *Store) CreateReviewItem(ctx context.Context, it *ReviewItem) error {
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO review_items (id, user_id, token_id, direction, kind, title, body_md,
-			options_json, recommend, context_json, urgency, status, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			options_json, recommend, context_json, urgency, status, created_at, expires_at, task_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.ID, it.UserID, it.TokenID, it.Direction, it.Kind, it.Title, it.BodyMD,
 		string(opts), it.Recommend, string(cx), it.Urgency, it.Status,
-		it.CreatedAt.Unix(), it.ExpiresAt.Unix()); err != nil {
+		it.CreatedAt.Unix(), it.ExpiresAt.Unix(), it.TaskID); err != nil {
 		return err
 	}
 	for i, a := range it.Attachments {
@@ -130,7 +135,8 @@ func (s *Store) GetReviewItem(ctx context.Context, id string) (*ReviewItem, erro
 const reviewSelect = `
 	SELECT id, user_id, token_id, direction, kind, title, body_md, options_json,
 	       recommend, context_json, urgency, status, created_at, expires_at,
-	       answered_at, answer_value, answer_note, answered_by, claimed_by, claimed_at
+	       answered_at, answer_value, answer_note, answered_by, claimed_by, claimed_at,
+	       task_id
 	FROM review_items`
 
 // ListReviewItems returns a user's items, blocked-first then newest.
@@ -303,51 +309,6 @@ func (s *Store) SweepExpired(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// ClaimTask atomically hands the oldest pending task to one agent.
-func (s *Store) ClaimTask(ctx context.Context, userID, claimant string) (*ReviewItem, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	var id string
-	err = tx.QueryRowContext(ctx, `
-		SELECT id FROM review_items
-		WHERE user_id = ? AND direction = 'task' AND status = 'open'
-		ORDER BY created_at LIMIT 1`, userID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE review_items SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND status = 'open'`,
-		claimant, time.Now().Unix(), id); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return s.GetReviewItem(ctx, id)
-}
-
-// CompleteTask marks a claimed task done with a result summary.
-func (s *Store) CompleteTask(ctx context.Context, id, claimant, result string) error {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE review_items SET status = 'done', answer_note = ?, answered_at = ?
-		WHERE id = ? AND claimed_by = ? AND status = 'claimed'`,
-		result, time.Now().Unix(), id, claimant)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // --- scanning ------------------------------------------------------------------
 
 type rowScanner interface {
@@ -364,15 +325,19 @@ func (s *Store) scanItem(row *sql.Row) (*ReviewItem, error) {
 
 func scanItemRows(row rowScanner) (*ReviewItem, error) {
 	var it ReviewItem
-	var token, recommend, ansVal, ansNote, ansBy, claimBy sql.NullString
+	var token, recommend, ansVal, ansNote, ansBy, claimBy, taskID sql.NullString
 	var optsJSON, ctxJSON string
 	var created, expires int64
 	var answered, claimed sql.NullInt64
 
 	if err := row.Scan(&it.ID, &it.UserID, &token, &it.Direction, &it.Kind, &it.Title,
 		&it.BodyMD, &optsJSON, &recommend, &ctxJSON, &it.Urgency, &it.Status,
-		&created, &expires, &answered, &ansVal, &ansNote, &ansBy, &claimBy, &claimed); err != nil {
+		&created, &expires, &answered, &ansVal, &ansNote, &ansBy, &claimBy, &claimed,
+		&taskID); err != nil {
 		return nil, err
+	}
+	if taskID.Valid {
+		it.TaskID = &taskID.String
 	}
 	if token.Valid {
 		it.TokenID = &token.String

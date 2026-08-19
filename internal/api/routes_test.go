@@ -18,6 +18,7 @@ import (
 	"github.com/jclement/herdrer/internal/paste"
 	"github.com/jclement/herdrer/internal/review"
 	"github.com/jclement/herdrer/internal/store"
+	"github.com/jclement/herdrer/internal/tasks"
 	"github.com/jclement/herdrer/internal/terminal"
 )
 
@@ -68,7 +69,13 @@ func newTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, pastes, assets, "test"), st, u
+	tk := tasks.New(st, tm, rv, bus, nil, tasks.Options{
+		RepoRoot: dir, WorkerCap: 2, AcceptTimeout: 5 * time.Minute,
+		NudgeAfter: 10 * time.Minute, GiveUpAfter: 30 * time.Minute,
+		MaxAttempts: 2, Origin: testOrigin,
+	})
+	rv.SetResolvedHook(tk.OnReviewResolved)
+	return NewServer(cfg, st, a, rv, tm, ptys, nt, bus, pastes, assets, tk, "test"), st, u
 }
 
 // newTestServerNoUser returns a server on a box that has never been enrolled,
@@ -123,6 +130,13 @@ var everyRoute = []route{
 	{"GET", "/api/v1/review/abc/render", "session"},
 	{"GET", "/api/v1/tasks", "session"},
 	{"POST", "/api/v1/tasks", "session"},
+	{"GET", "/api/v1/tasks/abc", "session"},
+	{"PATCH", "/api/v1/tasks/abc", "session"},
+	{"POST", "/api/v1/tasks/abc/ready", "session"},
+	{"POST", "/api/v1/tasks/abc/cancel", "session"},
+	{"POST", "/api/v1/tasks/abc/retry", "session"},
+	{"POST", "/api/v1/tasks/abc/close", "session"},
+	{"GET", "/api/v1/tasks/abc/tail", "session"},
 	{"GET", "/api/v1/push/key", "session"},
 	{"GET", "/api/v1/push/subscriptions", "session"},
 	{"POST", "/api/v1/push/subscribe", "session"},
@@ -140,8 +154,13 @@ var everyRoute = []route{
 	{"GET", "/api/v1/agent/review", "token"},
 	{"GET", "/api/v1/agent/review/abc", "token"},
 	{"DELETE", "/api/v1/agent/review/abc", "token"},
+	{"GET", "/api/v1/agent/tasks/next", "token"},
 	{"GET", "/api/v1/agent/tasks/claim", "token"},
-	{"POST", "/api/v1/agent/tasks/abc/complete", "token"},
+	{"POST", "/api/v1/agent/tasks/abc/accept", "token"},
+	{"POST", "/api/v1/agent/tasks/abc/note", "token"},
+	{"POST", "/api/v1/agent/tasks/abc/ask", "token"},
+	{"POST", "/api/v1/agent/tasks/abc/done", "token"},
+	{"POST", "/api/v1/agent/tasks/abc/release", "token"},
 }
 
 func req(method, path string) *http.Request {

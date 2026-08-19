@@ -1,20 +1,17 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Coffee, Plus, WifiOff } from "lucide-react";
 import { describeError } from "../../lib/api";
-import { useAgents, useCreateTask, useReviews } from "../../lib/queries";
+import { useAgents, useReviews } from "../../lib/queries";
 import { BAND_LABEL, groupInbox } from "../../lib/inbox";
 import { taglineForDate } from "../../lib/taglines";
 import {
   Button,
   EmptyState,
   ErrorState,
-  Field,
   SectionHeader,
   SkeletonRows,
-  inputClass,
 } from "../../components/ui";
-import { Sheet } from "../../components/Sheet";
-import { useToast } from "../../components/toast";
+import { NewTaskSheet } from "../tasks/NewTaskSheet";
 import { InboxRow } from "./InboxRow";
 import { InstallNudge } from "./InstallNudge";
 
@@ -159,74 +156,7 @@ export function InboxPage() {
         <Plus className="w-6 h-6 lg:w-5 lg:h-5" />
       </button>
 
-      <TaskComposer open={composing} onClose={() => setComposing(false)} />
+      <NewTaskSheet open={composing} onClose={() => setComposing(false)} />
     </div>
-  );
-}
-
-function TaskComposer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [body, setBody] = useState("");
-  const [scope, setScope] = useState("");
-  const create = useCreateTask();
-  const toast = useToast();
-
-  const submit = () => {
-    create.mutate(
-      { body: body.trim(), ...(scope.trim() ? { scope: scope.trim() } : {}) },
-      {
-        onSuccess: () => {
-          toast.show("Task queued. The next agent that asks will claim it.", { tone: "ok" });
-          setBody("");
-          setScope("");
-          onClose();
-        },
-        onError: (err) => toast.show(describeError(err), { tone: "danger" }),
-      },
-    );
-  };
-
-  return (
-    <Sheet
-      open={open}
-      title="Queue a task"
-      onClose={onClose}
-      footer={
-        <Button
-          variant="primary"
-          size="lg"
-          className="w-full"
-          loading={create.isPending}
-          disabled={body.trim() === ""}
-          onClick={submit}
-        >
-          Queue it
-        </Button>
-      }
-    >
-      <div className="space-y-3 p-3">
-        <Field
-          label="What should someone look at?"
-          hint="An agent claims the oldest matching task."
-        >
-          <textarea
-            className={`${inputClass} min-h-28 font-sans`}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Look at why the solver got slow after the index change."
-          />
-        </Field>
-        <Field label="Scope" hint="Optional. Restricts which agent may claim it.">
-          <input
-            className={inputClass}
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="be"
-          />
-        </Field>
-      </div>
-    </Sheet>
   );
 }

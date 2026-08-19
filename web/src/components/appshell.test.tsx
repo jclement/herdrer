@@ -110,7 +110,7 @@ describe("the desktop header sits still", () => {
     mockWidth(true);
     render(<Header />);
     const labels = [...document.querySelectorAll("nav a")].map((a) => a.textContent);
-    expect(labels).toEqual(["Terminal", "Agents", "Settings"]);
+    expect(labels).toEqual(["Terminal", "Tasks", "Agents", "Settings"]);
   });
 
   it("lights Terminal at both URLs that mean the terminal", () => {
@@ -155,7 +155,7 @@ describe("the phone's chrome", () => {
     mockWidth(false);
     render(<BottomNav reviewBadge={0} agentBadge={0} />);
     const labels = [...document.querySelectorAll("nav a")].map((a) => a.textContent);
-    expect(labels).toEqual(["Inbox", "Terminal", "Agents", "Settings"]);
+    expect(labels).toEqual(["Inbox", "Tasks", "Terminal", "Agents", "Settings"]);
   });
 
   it("calls the last tab Settings, the same word the desktop menu uses", () => {

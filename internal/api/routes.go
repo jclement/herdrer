@@ -66,9 +66,18 @@ func (s *Server) routes() http.Handler {
 	human("DELETE /api/v1/review/{id}", s.handleDismissReview)
 	human("GET /api/v1/review/{id}/render", s.handleRenderReview)
 
-	// the reverse channel: a human queues work for an idle agent
+	// tasks: what the human has delegated. Filing is human-only, which is the
+	// primary anti-injection control — nothing an agent writes can become a
+	// task that briefs another agent.
 	human("GET /api/v1/tasks", s.handleListTasks)
 	human("POST /api/v1/tasks", s.handleCreateTask)
+	human("GET /api/v1/tasks/{id}", s.handleGetTask)
+	human("PATCH /api/v1/tasks/{id}", s.handleEditTask)
+	human("POST /api/v1/tasks/{id}/ready", s.handleReadyTask)
+	human("POST /api/v1/tasks/{id}/cancel", s.handleCancelTask)
+	human("POST /api/v1/tasks/{id}/retry", s.handleRetryTask)
+	human("POST /api/v1/tasks/{id}/close", s.handleCloseTask)
+	human("GET /api/v1/tasks/{id}/tail", s.handleTaskTail)
 
 	// notifications
 	human("GET /api/v1/push/key", s.handlePushKey)
@@ -104,8 +113,16 @@ func (s *Server) routes() http.Handler {
 	agent("GET /api/v1/agent/review/{id}", s.handleAgentGetReview, "review:read")
 	agent("DELETE /api/v1/agent/review/{id}", s.handleAgentCancelReview, "review:write")
 	agent("GET /api/v1/agent/review", s.handleAgentListReview, "review:read")
+	// the task lifecycle, from the worker's side. One scope covers it all —
+	// the vocabulary stays small because every tool description is a permanent
+	// tax on an agent's context.
+	agent("GET /api/v1/agent/tasks/next", s.handleAgentNextTask, "task:claim")
 	agent("GET /api/v1/agent/tasks/claim", s.handleAgentClaimTask, "task:claim")
-	agent("POST /api/v1/agent/tasks/{id}/complete", s.handleAgentCompleteTask, "task:claim")
+	agent("POST /api/v1/agent/tasks/{id}/accept", s.handleAgentAcceptTask, "task:claim")
+	agent("POST /api/v1/agent/tasks/{id}/note", s.handleAgentNoteTask, "task:claim")
+	agent("POST /api/v1/agent/tasks/{id}/ask", s.handleAgentAskTask, "task:claim")
+	agent("POST /api/v1/agent/tasks/{id}/done", s.handleAgentDoneTask, "task:claim")
+	agent("POST /api/v1/agent/tasks/{id}/release", s.handleAgentReleaseTask, "task:claim")
 
 	// --- static: the SPA and the vended agent skill --------------------------
 	mux.HandleFunc("GET /onboard/skill.md", s.handleSkillMarkdown)

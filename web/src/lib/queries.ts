@@ -11,6 +11,8 @@ import type {
   ReviewItem,
   SessionRow,
   Task,
+  TaskDetail,
+  TaskTail,
   TokenRow,
 } from "./types";
 
@@ -22,6 +24,7 @@ export const qk = {
   agents: ["agents"] as const,
   herdrState: ["herdr", "state"] as const,
   tasks: ["tasks"] as const,
+  task: (id: string) => ["task", id] as const,
   credentials: ["credentials"] as const,
   sessions: ["sessions"] as const,
   tokens: ["tokens"] as const,
@@ -129,14 +132,68 @@ export function useTasks() {
     queryKey: qk.tasks,
     queryFn: () => api.get<Task[]>("/api/v1/tasks"),
     retry: retryUnlessAuth,
+    // The stream invalidates on every transition; the interval is the net
+    // under a dropped socket, not the mechanism.
+    refetchInterval: 30_000,
+  });
+}
+
+export function useTask(id: string) {
+  return useQuery({
+    queryKey: qk.task(id),
+    queryFn: () => api.get<TaskDetail>(`/api/v1/tasks/${encodeURIComponent(id)}`),
+    retry: retryUnlessAuth,
+  });
+}
+
+export function useTaskTail(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.task(id), "tail"] as const,
+    queryFn: () => api.get<TaskTail>(`/api/v1/tasks/${encodeURIComponent(id)}/tail`),
+    retry: retryUnlessAuth,
+    enabled,
   });
 }
 
 export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { body: string; scope?: string }) => api.post<Task>("/api/v1/tasks", vars),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.tasks }),
+    mutationFn: (vars: {
+      title?: string;
+      body_md: string;
+      repo?: string;
+      kind?: string;
+      branch?: string;
+      run_now?: boolean;
+    }) => api.post<Task>("/api/v1/tasks", vars),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.tasks });
+      void qc.invalidateQueries({ queryKey: qk.bootstrap });
+    },
+  });
+}
+
+/** ready / cancel / retry / close — the human's verbs on one task. */
+export function useTaskAction(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { action: "ready" | "cancel" | "retry" | "close"; result?: string }) =>
+      api.post<Task>(
+        `/api/v1/tasks/${encodeURIComponent(id)}/${vars.action}`,
+        vars.action === "close" ? { result: vars.result ?? "" } : {},
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.tasks });
+      void qc.invalidateQueries({ queryKey: qk.task(id) });
+      void qc.invalidateQueries({ queryKey: qk.bootstrap });
+    },
+  });
+}
+
+/** Bring an agent's pane to the foreground before opening the terminal. */
+export function useFocusAgent() {
+  return useMutation({
+    mutationFn: (agent: string) => api.post<void>("/api/v1/herdr/focus", { agent }),
   });
 }
 

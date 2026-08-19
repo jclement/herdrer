@@ -785,6 +785,7 @@ export function TerminalPage() {
           <BottomNav
             embedded
             reviewBadge={queue.open}
+            taskBadge={boot.data?.counts.tasks_attention ?? 0}
             agentBadge={boot.data?.counts.agents_blocked ?? 0}
             warnMore={boot.data?.vapid_public_key === null}
           />

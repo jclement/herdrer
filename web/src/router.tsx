@@ -25,6 +25,8 @@ import { Spinner } from "./components/ui";
 import { Login } from "./features/auth/Login";
 import { InboxPage } from "./features/review/InboxPage";
 import { ItemPage } from "./features/review/ItemPage";
+import { TasksPage } from "./features/tasks/TasksPage";
+import { TaskPage } from "./features/tasks/TaskPage";
 import { ReviewQueueProvider } from "./features/review/ReviewQueue";
 import { NotFound, RouteError } from "./features/misc/Pages";
 
@@ -164,6 +166,7 @@ function RootLayout() {
         {!leaf && !desktop && (
           <BottomNav
             reviewBadge={counts?.review_open ?? 0}
+            taskBadge={counts?.tasks_attention ?? 0}
             agentBadge={counts?.agents_blocked ?? 0}
             warnMore={boot.data?.vapid_public_key === null}
           />
@@ -201,6 +204,18 @@ const inboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/inbox",
   component: InboxPage,
+});
+
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks",
+  component: TasksPage,
+});
+
+const taskRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/$id",
+  component: TaskPage,
 });
 
 const itemRoute = createRoute({
@@ -255,6 +270,8 @@ const routeTree = rootRoute.addChildren([
   homeRoute,
   terminalRoute,
   inboxRoute,
+  tasksRoute,
+  taskRoute,
   itemRoute,
   agentsRoute,
   legacyTerminalRoute,

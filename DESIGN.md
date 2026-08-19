@@ -45,6 +45,31 @@ Smoke-verified on a real run: `enroll` prints a single-use code; `/api/v1/health
 Where this document describes something unbuilt it says so in the section. Where a brief argued
 for something the code does differently, the code wins and the divergence is named.
 
+### 0.1 The task system (2026-08-19)
+
+`docs/BRIEF-tasks.md` is the design brief for the task queue and dispatcher, and the tree now
+implements its v1: migration `0005_tasks.sql` (dedicated `tasks` + `task_events` tables, and
+`review_items.task_id`), `internal/store/task.go`, `internal/tasks` (the deterministic
+dispatcher / monitor / reconciler — there is deliberately **no coordinator LLM**; the plan is
+rows), `internal/terminal/control.go` (the shell-tier Herdr verbs: worktree create/open, agent
+start, prompt, tail read), the session and agent task routes in `internal/api/handlers_tasks.go`,
+the "Working a task" section of the vended skill, `herdrer task add`, and the `/tasks` screens
+in the SPA.
+
+Consolidated overrides of this document, per that brief:
+
+1. **§4 — tasks left `review_items`.** The `direction='task'` stub is retired; migration 0005
+   ports open rows and cancels the old ones. `direction` remains in the schema, legacy.
+2. **`GET /api/v1/agent/tasks/claim` returns 204 on empty**, not 404 — cone's inbox contract,
+   which makes herdrer a drop-in cone source for a board on another box.
+3. **§5.4's relay is narrowed for task-linked items**: the prompt says "your question was
+   answered; fetch it", never the rendered answer. One greppable invariant — no non-herdrer-
+   authored byte in `agent.prompt` — enforced in `internal/tasks/prompts.go` and its test.
+4. **`task:claim` covers the whole worker lifecycle** (accept/note/ask/done/release); the scope
+   vocabulary stays four entries.
+5. **`HERDRER_TERMINAL_ENABLED=false` also disables dispatch** — starting an agent and prompting
+   it is a shell, so review-only mode keeps the queue visible and runs nothing.
+
 ---
 
 ## 1. Architecture

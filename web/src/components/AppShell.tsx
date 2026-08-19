@@ -3,6 +3,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Bot,
   ChevronLeft,
+  ClipboardList,
   Inbox,
   Monitor,
   Moon,
@@ -67,6 +68,10 @@ export function headerFor(
     // Standalone web apps have no browser back button; every leaf carries one.
     return { title: "Review", back: { to: "/inbox", label: "Back to the inbox" } };
   }
+  if (pathname.startsWith("/tasks/")) {
+    return { title: "Task", back: { to: "/tasks", label: "Back to tasks" } };
+  }
+  if (pathname === "/tasks") return { title: "Tasks" };
   if (pathname === "/agents") return { title: "Agents" };
   if (pathname === "/settings") return { title: "Settings" };
   if (pathname === "/inbox" || pathname === "/") return { title: "Inbox" };
@@ -159,6 +164,7 @@ export function HeaderNav({ className }: { className?: string }) {
   return (
     <nav aria-label="Primary" className={cx("flex shrink-0 items-center gap-1", className)}>
       <HeaderTab to="/" label="Terminal" active={path === "/" || path === TERMINAL_PATH} />
+      <HeaderTab to="/tasks" label="Tasks" active={path.startsWith("/tasks")} />
       <HeaderTab to="/agents" label="Agents" active={path === "/agents"} />
       <HeaderTab to="/settings" label="Settings" active={path === "/settings"} />
     </nav>
@@ -215,11 +221,14 @@ function HeaderTab({ to, label, active }: { to: string; label: string; active: b
  */
 export function BottomNav({
   reviewBadge,
+  taskBadge = 0,
   agentBadge,
   warnMore,
   embedded,
 }: {
   reviewBadge: number;
+  /** Tasks needing the human: held for review, or failed. */
+  taskBadge?: number;
   agentBadge: number;
   warnMore?: boolean;
   embedded?: boolean;
@@ -234,7 +243,7 @@ export function BottomNav({
       )}
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="grid grid-cols-4">
+      <div className="grid grid-cols-5">
         <NavTab
           to="/"
           icon={<Inbox className="w-4 h-4" />}
@@ -244,6 +253,13 @@ export function BottomNav({
           // went dark depending on which of the two you arrived by would be
           // reporting on the URL rather than on where you are.
           active={path === "/" || path === "/inbox"}
+        />
+        <NavTab
+          to="/tasks"
+          icon={<ClipboardList className="w-4 h-4" />}
+          label="Tasks"
+          badge={taskBadge}
+          active={path.startsWith("/tasks")}
         />
         <NavTab
           to={TERMINAL_PATH}

@@ -90,12 +90,41 @@ the answer.
 serialises with `answer_value: null` *and drops `recommend`*, so an agent
 cannot read its own suggestion back out of a timeout.
 
-## Tasks — the reverse channel (human writes, agent claims)
+## Tasks — delegated work (human files, the dispatcher runs it)
+
+A task is a request, never an authorization. Filing is human-only — that is the
+primary anti-injection control, because a task briefs an agent. The Go
+dispatcher inside herdrer claims ready tasks, opens a worktree, starts a named
+Claude Code worker under Herdr, and pokes it with a constant prompt carrying
+only server-minted ids; the body travels over this API, never through
+`agent.prompt`.
+
+Lifecycle: `inbox → ready → dispatching → doing ⇄ blocked → review → done`,
+with `failed` and `cancelled` as the other exits. `dispatching` means the poke
+was sent and the worker has not yet acknowledged; `review` means there is
+evidence or a delivered review waiting on the human, and such a task is never
+silently re-queued.
 
 ```
-GET  /api/v1/tasks                    -> [task]
-POST /api/v1/tasks  {body, scope?}    -> task
+GET   /api/v1/tasks?status=…          -> [task]  (default: everything current)
+POST  /api/v1/tasks                   -> task
+      {title?, body_md, repo?, kind?, branch?, priority?, run_now?}
+      kind: change (default) | investigate | chore
+      run_now files straight to ready; otherwise it sits in the inbox
+GET   /api/v1/tasks/{id}              -> task + events[] + items[] (the timeline)
+PATCH /api/v1/tasks/{id}              edit while inbox|ready
+POST  /api/v1/tasks/{id}/ready        inbox -> ready
+POST  /api/v1/tasks/{id}/cancel       any non-terminal -> cancelled; withdraws its open questions
+POST  /api/v1/tasks/{id}/retry        failed|review -> ready, reusing the worktree
+POST  /api/v1/tasks/{id}/close {result?}   review -> done, by the human
+GET   /api/v1/tasks/{id}/tail         the captured terminal evidence, lazily
 ```
+
+A task's questions and its delivered review are ordinary review items carrying
+`task_id`; answering them advances the task (an `ask` unblocks it; approving a
+`review`-kind delivery closes it; anything else is changes-requested). An
+expired linked item never advances the task — a timeout is not consent, and not
+progress either.
 
 ## Terminal and realtime (human only)
 
@@ -216,9 +245,28 @@ GET    /api/v1/agent/review/{id}      current state
 GET    /api/v1/agent/review/{id}?wait=300   long-poll until answered/expired
 DELETE /api/v1/agent/review/{id}      cancel (the worker died or it went stale)
 GET    /api/v1/agent/review?status=open     what this token is still waiting on
-GET    /api/v1/agent/tasks/claim?scope=…    atomically claim the oldest pending task
-POST   /api/v1/agent/tasks/{id}/complete {result} 
 ```
+
+Task lifecycle, from the worker's side (scope `task:claim`). Identity is the
+`X-Herdrer-Agent` header carrying the worker name from the bootstrap prompt;
+an external puller's identity is its token.
+
+```
+GET  /api/v1/agent/tasks/next               the task assigned to you, in full; 204 if none
+POST /api/v1/agent/tasks/{id}/accept        dispatching -> doing; the ack that proves the poke landed
+POST /api/v1/agent/tasks/{id}/note {text}   append a finding; no state change
+POST /api/v1/agent/tasks/{id}/ask  {…}      review-item body; task -> blocked; long-poll the returned id
+POST /api/v1/agent/tasks/{id}/done {result, review_item_id?}
+     result is REQUIRED. kind=change also requires a linked open review
+     (post it via /agent/review first) -> task is held for the human.
+POST /api/v1/agent/tasks/{id}/release {note} back to ready; the note is required
+GET  /api/v1/agent/tasks/claim?repo=…       external pullers (cone's inbox contract):
+     one GET hands the caller one ready, repo-unbound (or ?repo=-matching)
+     task; 204 when there are none
+```
+
+A `409 CONFLICT` whose message starts `TASK_CANCELLED` means the human withdrew
+the task: stop working on it.
 
 Create body:
 ```jsonc
