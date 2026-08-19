@@ -53,7 +53,14 @@ func EnsureCredential(ctx context.Context, st *store.Store, a *auth.Service, hom
 	}
 
 	if haveFile && haveToken {
-		return nil
+		// The pair is intact, but the origin it records may not be: a box that
+		// changes hostname — or moves onto a tailnet — leaves this file naming
+		// a URL that no longer answers. Nothing else ever corrects it, and the
+		// failure is silent, because an agent posting a question to a dead host
+		// looks exactly like an agent with nothing to ask. Repoint it in place
+		// and keep the token: a rename is not a reason to revoke a credential
+		// that every running pane already holds in its environment.
+		return repointURL(path, origin)
 	}
 
 	// Either half is missing, so the pair is not trustworthy: revoke whatever
@@ -95,6 +102,38 @@ export HERDRER_TOKEN=%s
 	// Make sure an interactive shell actually picks it up, or the token exists
 	// and no agent ever sees it.
 	return ensureBashrcSources(home, path)
+}
+
+// repointURL rewrites the HERDRER_URL line if it no longer matches origin,
+// leaving the token and every comment in the file untouched.
+//
+// Line-oriented on purpose: this file is the agents' credential, and the token
+// in it is the one thing that must survive. Re-rendering the whole file from a
+// template would work today and silently drop whatever a future version adds.
+func repointURL(path, origin string) error {
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	want := "export HERDRER_URL=" + origin
+	lines := strings.Split(string(cur), "\n")
+	changed := false
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "export HERDRER_URL=") {
+			continue
+		}
+		if line == want {
+			return nil
+		}
+		slog.Info("agent credential points at a stale origin, repointing",
+			"path", path, "from", strings.TrimPrefix(line, "export HERDRER_URL="), "to", origin)
+		lines[i] = want
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 // ensureBashrcSources adds the one line that puts the credential into every
