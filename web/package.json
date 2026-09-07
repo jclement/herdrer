@@ -13,7 +13,7 @@
     "icons": "bun run scripts/gen-icons.ts"
   },
   "dependencies": {
-    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-router": "^1.170.29",
     "@xterm/addon-fit": "^0.11.0",
